@@ -41,6 +41,8 @@
 #define WIN_FEATURE_CLUSTER_MAIN	BIT(4)
 #define WIN_FEATURE_CLUSTER_SUB		BIT(5)
 
+#define VOP2_SOC_VARIANT		4
+
 enum bcsh_out_mode {
 	BCSH_OUT_MODE_BLACK,
 	BCSH_OUT_MODE_BLUE,
@@ -515,8 +517,8 @@ struct vop2_win_regs {
 	struct vop_reg alpha_mode;
 	struct vop_reg alpha_en;
 	struct vop_reg global_alpha_val;
-	struct vop_reg key_color;
-	struct vop_reg key_en;
+	struct vop_reg color_key;
+	struct vop_reg color_key_en;
 };
 
 struct vop2_video_port_regs {
@@ -599,6 +601,11 @@ struct vop2_video_port_regs {
 	struct vop_reg bcsh_y2r_en;
 	struct vop_reg bcsh_out_mode;
 	struct vop_reg bcsh_en;
+
+	/* 3d lut */
+	struct vop_reg cubic_lut_en;
+	struct vop_reg cubic_lut_update_en;
+	struct vop_reg cubic_lut_mst;
 };
 
 struct vop2_wb_regs {
@@ -671,7 +678,9 @@ struct vop2_wb_data {
 struct vop2_video_port_data {
 	char id;
 	uint32_t feature;
-	uint64_t soc_id;
+	uint64_t soc_id[VOP2_SOC_VARIANT];
+	uint16_t gamma_lut_len;
+	uint16_t cubic_lut_len;
 	struct vop_rect max_output;
 	const u8 pre_scan_max_dly[4];
 	const struct vop_intr *intr;
@@ -744,6 +753,7 @@ struct vop2_ctrl {
 	struct vop_reg version;
 	struct vop_reg standby;
 	struct vop_reg dma_stop;
+	struct vop_reg lut_dma_en;
 	struct vop_reg axi_outstanding_max_num;
 	struct vop_reg axi_max_outstanding_en;
 	struct vop_reg hdmi_dclk_out_en;
@@ -808,6 +818,7 @@ struct vop2_ctrl {
 	struct vop_reg bt656_yc_swap;
 	struct vop_reg gamma_port_sel;
 
+	struct vop_reg otp_en;
 	struct vop_reg reg_done_frm;
 	struct vop_reg cfg_done;
 };

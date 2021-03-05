@@ -10,7 +10,7 @@
 #include <linux/types.h>
 #include <linux/v4l2-controls.h>
 
-#define RKISP_API_VERSION		KERNEL_VERSION(1, 4, 1)
+#define RKISP_API_VERSION		KERNEL_VERSION(1, 5, 1)
 
 #define RKISP_CMD_TRIGGER_READ_BACK \
 	_IOW('V', BASE_VIDIOC_PRIVATE + 0, struct isp2x_csi_trigger)
@@ -574,6 +574,16 @@ struct isp2x_goc_cfg {
 	u8 gamma_y[17];
 } __attribute__ ((packed));
 
+struct isp2x_hdrtmo_predict {
+	u8 global_tmo;
+	s32 iir_max;
+	s32 global_tmo_strength;
+
+	u8 scene_stable;
+	s32 k_rolgmean;
+	s32 iir;
+} __attribute__ ((packed));
+
 struct isp2x_hdrtmo_cfg {
 	u16 cnt_vsize;
 	u8 gain_ld_off2;
@@ -625,6 +635,8 @@ struct isp2x_hdrtmo_cfg {
 
 	u16 maxgain;
 	u16 maxpalpha;
+
+	struct isp2x_hdrtmo_predict predict;
 } __attribute__ ((packed));
 
 struct isp2x_hdrtmo_stat {

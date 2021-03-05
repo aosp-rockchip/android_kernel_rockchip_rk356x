@@ -150,12 +150,23 @@ enum ENC_INFO_TYPE {
 	ENC_INFO_BUTT,
 };
 
-enum ENC_INFO_FLAGS {
-	ENC_INFO_FLAG_NULL		= 0,
-	ENC_INFO_FLAG_NUMBER,
-	ENC_INFO_FLAG_STRING,
+enum DEC_INFO_TYPE {
+	DEC_INFO_BASE		= 0,
+	DEC_INFO_WIDTH,
+	DEC_INFO_HEIGHT,
+	DEC_INFO_FORMAT,
+	DEC_INFO_BITDEPTH,
+	DEC_INFO_FPS,
 
-	ENC_INFO_FLAG_BUTT,
+	DEC_INFO_BUTT,
+};
+
+enum CODEC_INFO_FLAGS {
+	CODEC_INFO_FLAG_NULL	= 0,
+	CODEC_INFO_FLAG_NUMBER,
+	CODEC_INFO_FLAG_STRING,
+
+	CODEC_INFO_FLAG_BUTT,
 };
 
 /* data common struct for parse out */
@@ -520,6 +531,7 @@ struct reset_control *mpp_reset_control_get(struct mpp_dev *mpp,
 					    const char *name);
 
 u32 mpp_get_grf(struct mpp_grf_info *grf_info);
+bool mpp_grf_is_changed(struct mpp_grf_info *grf_info);
 int mpp_set_grf(struct mpp_grf_info *grf_info);
 
 int mpp_time_record(struct mpp_task *task);

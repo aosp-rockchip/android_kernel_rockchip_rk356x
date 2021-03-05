@@ -408,7 +408,7 @@ static int rkispp_frame_end(struct rkispp_stream *stream)
 {
 	struct rkispp_device *dev = stream->isppdev;
 	struct capture_fmt *fmt = &stream->out_cap_fmt;
-	struct rkisp_ispp_reg *reg_buf;
+	struct rkisp_ispp_reg *reg_buf = NULL;
 	unsigned long lock_flags = 0;
 	int i = 0;
 
@@ -431,7 +431,8 @@ static int rkispp_frame_end(struct rkispp_stream *stream)
 			atomic_read(&dev->ispp_sdev.frm_sync_seq);
 		stream->curr_buf->vb.vb2_buf.timestamp = ns;
 
-		if (rkispp_reg_withstream && (fmt->wr_fmt & FMT_FBC)) {
+		if (stream->is_reg_withstream &&
+		    (fmt->wr_fmt & FMT_FBC || fmt->wr_fmt == FMT_YUV420)) {
 			void *addr = vb2_plane_vaddr(&stream->curr_buf->vb.vb2_buf, i);
 
 			rkispp_find_regbuf_by_id(dev, &reg_buf, dev->dev_id,
@@ -444,6 +445,9 @@ static int rkispp_frame_end(struct rkispp_stream *stream)
 
 				rkispp_release_regbuf(dev, reg_buf);
 				vb2_set_plane_payload(&stream->curr_buf->vb.vb2_buf, 1, cpy_size);
+				v4l2_dbg(3, rkispp_debug, &dev->v4l2_dev,
+					 "stream(0x%x) write reg buf to last plane\n",
+					 stream->id);
 			} else {
 				v4l2_err(&dev->v4l2_dev,
 					 "%s can not find reg buf: dev_id %d, sequence %d\n",
@@ -473,7 +477,8 @@ static int rkispp_frame_end(struct rkispp_stream *stream)
 		stream->dbg.id = stream->curr_buf->vb.sequence;
 
 		stream->curr_buf = NULL;
-	} else if (rkispp_reg_withstream && (fmt->wr_fmt & FMT_FBC)) {
+	} else if (stream->is_reg_withstream &&
+		   (fmt->wr_fmt & FMT_FBC || fmt->wr_fmt == FMT_YUV420)) {
 		u32 frame_id;
 
 		frame_id = atomic_read(&dev->ispp_sdev.frm_sync_seq);
@@ -1123,8 +1128,6 @@ static int config_modules(struct rkispp_device *dev)
 	if (ret < 0)
 		goto free_nr;
 
-	rkispp_params_configure(&dev->params_vdev);
-
 	return 0;
 free_nr:
 	nr_free_buf(dev);
@@ -1471,7 +1474,8 @@ static int rkispp_queue_setup(struct vb2_queue *queue,
 				plane_fmt->sizeimage;
 	}
 
-	if (rkispp_reg_withstream && (cap_fmt->wr_fmt & FMT_FBC)) {
+	if (stream->is_reg_withstream &&
+	    (cap_fmt->wr_fmt & FMT_FBC || cap_fmt->wr_fmt == FMT_YUV420)) {
 		(*num_planes)++;
 		sizes[1] = sizeof(struct rkisp_ispp_reg);
 	}
@@ -1560,29 +1564,26 @@ static void rkispp_stream_stop(struct rkispp_stream *stream)
 {
 	struct rkispp_device *dev = stream->isppdev;
 	bool is_wait = true;
-	int ret;
+	int ret = 0;
 
 	stream->stopping = true;
 	if (dev->inp == INP_ISP &&
 	    atomic_read(&dev->stream_vdev.refcnt) == 1) {
-		v4l2_subdev_call(&dev->ispp_sdev.sd,
-				 video, s_stream, false);
+		v4l2_subdev_call(&dev->ispp_sdev.sd, video, s_stream, false);
 		rkispp_stop_3a_run(dev);
-		ret = readl(dev->hw_dev->base_addr + RKISPP_CTRL_SYS_STATUS);
-		ret &= 0xff;
-		if (!ret && (dev->dev_id == dev->hw_dev->cur_dev_id))
+		if (dev->stream_vdev.fec.is_end &&
+		    (dev->dev_id != dev->hw_dev->cur_dev_id || dev->hw_dev->is_idle))
 			is_wait = false;
 	}
-	ret = 0;
 	if (is_wait) {
 		ret = wait_event_timeout(stream->done,
 					 !stream->streaming,
-					 msecs_to_jiffies(1000));
+					 msecs_to_jiffies(500));
 		if (!ret)
 			v4l2_warn(&dev->v4l2_dev,
 				  "stream:%d stop timeout\n", stream->id);
 	}
-	if (!ret && stream->ops) {
+	if (stream->ops) {
 		/* scl stream close dma write */
 		if (stream->ops->stop)
 			stream->ops->stop(stream);
@@ -1655,8 +1656,10 @@ static void rkispp_stop_streaming(struct vb2_queue *queue)
 	atomic_dec(&dev->stream_vdev.refcnt);
 
 	if (!atomic_read(&hw->refcnt) &&
-	    !atomic_read(&dev->stream_vdev.refcnt))
+	    !atomic_read(&dev->stream_vdev.refcnt)) {
 		rkispp_set_clk_rate(hw->clks[0], hw->core_clk_min);
+		hw->is_idle = true;
+	}
 	v4l2_dbg(1, rkispp_debug, &dev->v4l2_dev,
 		 "%s id:%d exit\n", __func__, stream->id);
 }
@@ -1923,7 +1926,9 @@ static int rkispp_set_fmt(struct rkispp_stream *stream,
 	if (fmt->mplanes == 1)
 		pixm->plane_fmt[0].sizeimage = imagsize;
 
-	if ((fmt->wr_fmt & FMT_FBC) && rkispp_reg_withstream)
+	stream->is_reg_withstream = rkispp_is_reg_withstream_local(&stream->vnode.vdev.dev);
+	if (stream->is_reg_withstream &&
+	    (fmt->wr_fmt & FMT_FBC || fmt->wr_fmt == FMT_YUV420))
 		pixm->num_planes++;
 
 	if (!try) {
@@ -2197,7 +2202,8 @@ static void restart_module(struct rkispp_device *dev)
 		if (!completion_done(&monitor->fec.cmpl))
 			complete(&monitor->fec.cmpl);
 	}
-	writel(val, base + RKISPP_CTRL_STRT);
+	if (!dev->hw_dev->is_shutdown)
+		writel(val, base + RKISPP_CTRL_STRT);
 	monitor->is_restart = false;
 	monitor->restart_module = 0;
 end:
@@ -2228,7 +2234,8 @@ static void restart_monitor(struct work_struct *work)
 		if (!(monitor->monitoring_module & m_monitor->module) ||
 		    ret || !monitor->is_en)
 			continue;
-
+		if (dev->hw_dev->is_shutdown)
+			break;
 		v4l2_dbg(1, rkispp_debug, &dev->v4l2_dev,
 			 "module:0x%x wait %ldms timeout ret:%d, monitoring:0x%x\n",
 			 m_monitor->module, time, ret, monitor->monitoring_module);
@@ -2293,7 +2300,7 @@ static void fec_work_event(struct rkispp_device *dev,
 	struct rkispp_dummy_buffer *dummy;
 	unsigned long lock_flags = 0, lock_flags1 = 0;
 	bool is_start = false, is_quick = false;
-	struct rkisp_ispp_reg *reg_buf;
+	struct rkisp_ispp_reg *reg_buf = NULL;
 	u32 val;
 
 	if (!(vdev->module_ens & ISPP_MODULE_FEC))
@@ -2371,8 +2378,22 @@ static void fec_work_event(struct rkispp_device *dev,
 		if (!dev->hw_dev->is_single)
 			rkispp_update_regs(dev, RKISPP_FEC, RKISPP_FEC_CROP);
 		writel(FEC_FORCE_UPD, base + RKISPP_CTRL_UPDATE);
-		if (vdev->nr.is_end)
+		if (vdev->nr.is_end) {
 			writel(OTHER_FORCE_UPD, base + RKISPP_CTRL_UPDATE);
+			/* check scale stream stop state */
+			for (val = STREAM_S0; val <= STREAM_S2; val++) {
+				stream = &vdev->stream[val];
+				if (stream->streaming && stream->stopping) {
+					if (stream->ops->is_stopped(stream)) {
+						stream->stopping = false;
+						stream->streaming = false;
+						wake_up(&stream->done);
+					} else {
+						stream->ops->stop(stream);
+					}
+				}
+			}
+		}
 		v4l2_dbg(3, rkispp_debug, &dev->v4l2_dev,
 			 "FEC start seq:%d | Y_SHD rd:0x%x\n",
 			 seq, readl(base + RKISPP_FEC_RD_Y_BASE_SHD));
@@ -2386,7 +2407,8 @@ static void fec_work_event(struct rkispp_device *dev,
 				complete(&monitor->fec.cmpl);
 		}
 
-		rkispp_find_regbuf_by_id(dev, &reg_buf, dev->dev_id, seq);
+		if (stream->is_reg_withstream)
+			rkispp_find_regbuf_by_id(dev, &reg_buf, dev->dev_id, seq);
 		if (reg_buf && (rkispp_debug_reg & ISPP_MODULE_FEC)) {
 			u32 offset, size;
 
@@ -2399,7 +2421,9 @@ static void fec_work_event(struct rkispp_device *dev,
 			offset += size;
 			reg_buf->reg_size = offset;
 		}
-		writel(FEC_ST, base + RKISPP_CTRL_STRT);
+
+		if (!dev->hw_dev->is_shutdown)
+			writel(FEC_ST, base + RKISPP_CTRL_STRT);
 		vdev->fec.is_end = false;
 	}
 restart_unlock:
@@ -2425,7 +2449,7 @@ static void nr_work_event(struct rkispp_device *dev,
 	bool is_start = false, is_quick = false;
 	bool is_tnr_en = vdev->module_ens & ISPP_MODULE_TNR;
 	bool is_fec_en = (vdev->module_ens & ISPP_MODULE_FEC);
-	struct rkisp_ispp_reg *reg_buf;
+	struct rkisp_ispp_reg *reg_buf = NULL;
 	u32 val;
 
 	if (!(vdev->module_ens & (ISPP_MODULE_NR | ISPP_MODULE_SHP)))
@@ -2578,6 +2602,7 @@ static void nr_work_event(struct rkispp_device *dev,
 			}
 			rkispp_update_regs(dev, RKISPP_NR, RKISPP_ORB_MAX_FEATURE);
 		}
+
 		writel(OTHER_FORCE_UPD, base + RKISPP_CTRL_UPDATE);
 
 		v4l2_dbg(3, rkispp_debug, &dev->v4l2_dev,
@@ -2600,7 +2625,8 @@ static void nr_work_event(struct rkispp_device *dev,
 				complete(&monitor->nr.cmpl);
 		}
 
-		rkispp_find_regbuf_by_id(dev, &reg_buf, dev->dev_id, seq);
+		if (stream->is_reg_withstream)
+			rkispp_find_regbuf_by_id(dev, &reg_buf, dev->dev_id, seq);
 		if (reg_buf && (rkispp_debug_reg & ISPP_MODULE_NR)) {
 			u32 offset, size;
 
@@ -2637,7 +2663,8 @@ static void nr_work_event(struct rkispp_device *dev,
 			offset += size;
 			reg_buf->reg_size = offset;
 		}
-		if (!is_quick)
+
+		if (!is_quick && !dev->hw_dev->is_shutdown)
 			writel(NR_SHP_ST, base + RKISPP_CTRL_STRT);
 		vdev->nr.is_end = false;
 	}
@@ -2671,7 +2698,7 @@ static void tnr_work_event(struct rkispp_device *dev,
 	u32 val, size = sizeof(vdev->tnr.buf) / sizeof(*dummy);
 	bool is_3to1 = vdev->tnr.is_3to1, is_start = false, is_skip = false;
 	bool is_en = rkispp_read(dev, RKISPP_TNR_CORE_CTRL) & SW_TNR_EN;
-	struct rkisp_ispp_reg *reg_buf;
+	struct rkisp_ispp_reg *reg_buf = NULL;
 
 	if (!(vdev->module_ens & ISPP_MODULE_TNR) ||
 	    (dev->inp == INP_ISP && dev->isp_mode & ISP_ISPP_QUICK))
@@ -2880,7 +2907,9 @@ static void tnr_work_event(struct rkispp_device *dev,
 			if (!completion_done(&monitor->tnr.cmpl))
 				complete(&monitor->tnr.cmpl);
 		}
-		rkispp_find_regbuf_by_id(dev, &reg_buf, dev->dev_id, seq);
+
+		if (stream->is_reg_withstream)
+			rkispp_find_regbuf_by_id(dev, &reg_buf, dev->dev_id, seq);
 		if (reg_buf && (rkispp_debug_reg & ISPP_MODULE_TNR)) {
 			u32 offset, size;
 
@@ -2893,7 +2922,9 @@ static void tnr_work_event(struct rkispp_device *dev,
 			offset += size;
 			reg_buf->reg_size = offset;
 		}
-		writel(TNR_ST, base + RKISPP_CTRL_STRT);
+
+		if (!dev->hw_dev->is_shutdown)
+			writel(TNR_ST, base + RKISPP_CTRL_STRT);
 		vdev->tnr.is_end = false;
 	}
 
@@ -3019,6 +3050,9 @@ void rkispp_module_work_event(struct rkispp_device *dev,
 {
 	bool is_fec_en = (dev->stream_vdev.module_ens & ISPP_MODULE_FEC);
 
+	if (dev->hw_dev->is_shutdown)
+		return;
+
 	if (dev->ispp_sdev.state != ISPP_STOP) {
 		if (module & ISPP_MODULE_TNR)
 			tnr_work_event(dev, buf_rd, buf_wr, is_isr);
@@ -3101,7 +3135,6 @@ void rkispp_isr(u32 mis_val, struct rkispp_device *dev)
 		if (rkispp_read(dev, RKISPP_TNR_CTRL) & SW_TNR_1ST_FRM)
 			rkispp_clear_bits(dev, RKISPP_TNR_CTRL, SW_TNR_1ST_FRM);
 
-	rkispp_params_isr(&dev->params_vdev, mis_val);
 	rkispp_stats_isr(&dev->stats_vdev, mis_val);
 
 	for (i = 0; i <= STREAM_S2; i++) {

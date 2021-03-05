@@ -2227,13 +2227,13 @@ static void hdmi_av_composer(struct dw_hdmi *hdmi,
 			 * Source Devices compliant shall set the
 			 * Source Version = 1.
 			 */
-			drm_scdc_readb(&hdmi->i2c->adap, SCDC_SINK_VERSION,
+			drm_scdc_readb(hdmi->ddc, SCDC_SINK_VERSION,
 				       &bytes);
-			drm_scdc_writeb(&hdmi->i2c->adap, SCDC_SOURCE_VERSION,
+			drm_scdc_writeb(hdmi->ddc, SCDC_SOURCE_VERSION,
 				min_t(u8, bytes, SCDC_MIN_SOURCE_VERSION));
 
 			/* Enabled Scrambling in the Sink */
-			drm_scdc_set_scrambling(&hdmi->i2c->adap, 1);
+			drm_scdc_set_scrambling(hdmi->ddc, 1);
 
 			/*
 			 * To activate the scrambler feature, you must ensure
@@ -2249,7 +2249,7 @@ static void hdmi_av_composer(struct dw_hdmi *hdmi,
 			hdmi_writeb(hdmi, 0, HDMI_FC_SCRAMBLER_CTRL);
 			hdmi_writeb(hdmi, (u8)~HDMI_MC_SWRSTZ_TMDSSWRST_REQ,
 				    HDMI_MC_SWRSTZ);
-			drm_scdc_set_scrambling(&hdmi->i2c->adap, 0);
+			drm_scdc_set_scrambling(hdmi->ddc, 0);
 		}
 	} else {
 		hdmi_writeb(hdmi, 0, HDMI_FC_SCRAMBLER_CTRL);
@@ -2842,6 +2842,7 @@ static int dw_hdmi_connector_atomic_check(struct drm_connector *connector,
 	 * drm_display_mode and set phy status to enabled.
 	 */
 	if (!vmode->mpixelclock) {
+		crtc_state = drm_atomic_get_crtc_state(state, crtc);
 		if (hdmi->plat_data->get_enc_in_encoding)
 			hdmi->hdmi_data.enc_in_encoding =
 				hdmi->plat_data->get_enc_in_encoding(data);
@@ -2855,7 +2856,7 @@ static int dw_hdmi_connector_atomic_check(struct drm_connector *connector,
 			hdmi->hdmi_data.enc_out_bus_format =
 				hdmi->plat_data->get_output_bus_format(data);
 
-		mode = &crtc->mode;
+		mode = &crtc_state->mode;
 		memcpy(&hdmi->previous_mode, mode, sizeof(hdmi->previous_mode));
 		vmode->mpixelclock = mode->crtc_clock * 1000;
 		vmode->previous_pixelclock = mode->clock;

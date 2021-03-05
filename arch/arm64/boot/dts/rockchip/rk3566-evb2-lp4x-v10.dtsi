@@ -175,11 +175,11 @@
 };
 
 &dsi0_in_vp0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &dsi0_in_vp1 {
-	status = "disabled";
+	status = "okay";
 };
 
 &dsi0_panel {
@@ -336,7 +336,7 @@
 		power-domains = <&power RK3568_PD_VI>;
 		pinctrl-names = "default";
 		/* conflict with gmac1m1_rgmii_pins & cif_clk*/
-		pinctrl-0 = <&cif_dvp_bus8>;
+		pinctrl-0 = <&cif_clk &cif_dvp_clk &cif_dvp_bus16>;
 
 		/*avdd-supply = <&vcc2v8_dvp>;*/
 		/*dovdd-supply = <&vcc1v8_dvp>;*/
@@ -471,7 +471,7 @@
 };
 
 &rkcif_dvp {
-	status = "okay";
+	status = "disabled";
 
 	port {
 		/* Parallel bus endpoint */
@@ -523,6 +523,7 @@
 
 &route_dsi0 {
 	status = "okay";
+	connect = <&vp1_out_dsi0>;
 };
 
 &sdmmc2 {

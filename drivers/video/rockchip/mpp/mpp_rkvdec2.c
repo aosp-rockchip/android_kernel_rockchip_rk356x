@@ -27,6 +27,7 @@
 #include <linux/thermal.h>
 #include <linux/notifier.h>
 #include <linux/proc_fs.h>
+#include <linux/nospec.h>
 #include <linux/rockchip/rockchip_sip.h>
 #include <linux/regulator/consumer.h>
 
@@ -142,6 +143,20 @@ struct rkvdec_task {
 	struct mpp_request w_reqs[MPP_MAX_MSG_NUM];
 	u32 r_req_cnt;
 	struct mpp_request r_reqs[MPP_MAX_MSG_NUM];
+	/* image info */
+	u32 width;
+	u32 height;
+	u32 pixels;
+};
+
+struct rkvdec_session_priv {
+	/* codec info from user */
+	struct {
+		/* show mode */
+		u32 flag;
+		/* item data */
+		u64 val;
+	} codec_info[DEC_INFO_BUTT];
 };
 
 struct rkvdec_dev {
@@ -154,6 +169,7 @@ struct rkvdec_dev {
 	struct mpp_clk_info core_clk_info;
 	struct mpp_clk_info cabac_clk_info;
 	struct mpp_clk_info hevc_cabac_clk_info;
+	u32 default_max_load;
 #ifdef CONFIG_PROC_FS
 	struct proc_dir_entry *procfs;
 #endif
@@ -373,6 +389,18 @@ static void *rkvdec_alloc_task(struct mpp_session *session,
 	mpp_set_rcbbuf(mpp, task);
 	task->strm_addr = task->reg[RKVDEC_REG_RLC_BASE_INDEX];
 	task->clk_mode = CLK_MODE_NORMAL;
+	/* get resolution info */
+	if (session->priv) {
+		struct rkvdec_session_priv *priv = session->priv;
+		u32 width = priv->codec_info[DEC_INFO_WIDTH].val;
+		u32 bitdepth = priv->codec_info[DEC_INFO_BITDEPTH].val;
+
+		task->width =  (bitdepth > 8) ? ((width * bitdepth + 7) >> 3) : width;
+		task->height = priv->codec_info[DEC_INFO_HEIGHT].val;
+		task->pixels = task->width * task->height;
+		mpp_debug(DEBUG_TASK_INFO, "width=%d, bitdepth=%d, height=%d\n",
+			  width, bitdepth, task->height);
+	}
 
 	mpp_debug_leave();
 
@@ -610,6 +638,75 @@ static int rkvdec_free_task(struct mpp_session *session,
 	return 0;
 }
 
+static int rkvdec_control(struct mpp_session *session, struct mpp_request *req)
+{
+	switch (req->cmd) {
+	case MPP_CMD_SEND_CODEC_INFO: {
+		int i;
+		int cnt;
+		struct codec_info_elem elem;
+		struct rkvdec_session_priv *priv;
+
+		if (!session || !session->priv) {
+			mpp_err("session info null\n");
+			return -EINVAL;
+		}
+		priv = session->priv;
+
+		cnt = req->size / sizeof(elem);
+		cnt = (cnt > DEC_INFO_BUTT) ? DEC_INFO_BUTT : cnt;
+		mpp_debug(DEBUG_IOCTL, "codec info count %d\n", cnt);
+		for (i = 0; i < cnt; i++) {
+			if (copy_from_user(&elem, req->data + i * sizeof(elem), sizeof(elem))) {
+				mpp_err("copy_from_user failed\n");
+				continue;
+			}
+			if (elem.type > DEC_INFO_BASE && elem.type < DEC_INFO_BUTT &&
+			    elem.flag > CODEC_INFO_FLAG_NULL && elem.flag < CODEC_INFO_FLAG_BUTT) {
+				elem.type = array_index_nospec(elem.type, DEC_INFO_BUTT);
+				priv->codec_info[elem.type].flag = elem.flag;
+				priv->codec_info[elem.type].val = elem.data;
+			} else {
+				mpp_err("codec info invalid, type %d, flag %d\n",
+					elem.type, elem.flag);
+			}
+		}
+	} break;
+	default: {
+		mpp_err("unknown mpp ioctl cmd %x\n", req->cmd);
+	} break;
+	}
+
+	return 0;
+}
+
+static int rkvdec_free_session(struct mpp_session *session)
+{
+	if (session && session->priv) {
+		kfree(session->priv);
+		session->priv = NULL;
+	}
+
+	return 0;
+}
+
+static int rkvdec_init_session(struct mpp_session *session)
+{
+	struct rkvdec_session_priv *priv;
+
+	if (!session) {
+		mpp_err("session is null\n");
+		return -EINVAL;
+	}
+
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+	session->priv = priv;
+
+	return 0;
+}
+
 #ifdef CONFIG_PROC_FS
 static int rkvdec_procfs_remove(struct mpp_dev *mpp)
 {
@@ -697,6 +794,9 @@ static int rkvdec_init(struct mpp_dev *mpp)
 	mpp_set_clk_info_rate_hz(&dec->cabac_clk_info, CLK_MODE_DEFAULT, 200 * MHZ);
 	mpp_set_clk_info_rate_hz(&dec->hevc_cabac_clk_info, CLK_MODE_DEFAULT, 300 * MHZ);
 
+	/* Get normal max workload from dtsi */
+	of_property_read_u32(mpp->dev->of_node,
+			     "rockchip,default-max-load", &dec->default_max_load);
 	/* Get reset control from dtsi */
 	dec->rst_a = mpp_reset_control_get(mpp, RST_TYPE_A, "video_a");
 	if (!dec->rst_a)
@@ -745,6 +845,42 @@ static int rkvdec_clk_off(struct mpp_dev *mpp)
 	clk_disable_unprepare(dec->core_clk_info.clk);
 	clk_disable_unprepare(dec->cabac_clk_info.clk);
 	clk_disable_unprepare(dec->hevc_cabac_clk_info.clk);
+
+	return 0;
+}
+
+static int rkvdec_get_freq(struct mpp_dev *mpp,
+			   struct mpp_task *mpp_task)
+{
+	u32 task_cnt;
+	u32 workload;
+	struct mpp_task *loop = NULL, *n;
+	struct rkvdec_dev *dec = to_rkvdec_dev(mpp);
+	struct rkvdec_task *task = to_rkvdec_task(mpp_task);
+
+	/* if not set max load, consider not have advanced mode */
+	if (!dec->default_max_load || !task->pixels)
+		return 0;
+
+	task_cnt = 1;
+	workload = task->pixels;
+	/* calc workload in pending list */
+	mutex_lock(&mpp->queue->pending_lock);
+	list_for_each_entry_safe(loop, n,
+				 &mpp->queue->pending_list,
+				 queue_link) {
+		struct rkvdec_task *loop_task = to_rkvdec_task(loop);
+
+		task_cnt++;
+		workload += loop_task->pixels;
+	}
+	mutex_unlock(&mpp->queue->pending_lock);
+
+	if (workload > dec->default_max_load)
+		task->clk_mode = CLK_MODE_ADVANCED;
+
+	mpp_debug(DEBUG_TASK_INFO, "pending task %d, workload %d, clk_mode=%d\n",
+		  task_cnt, workload, task->clk_mode);
 
 	return 0;
 }
@@ -808,6 +944,7 @@ static struct mpp_hw_ops rkvdec_v2_hw_ops = {
 	.init = rkvdec_init,
 	.clk_on = rkvdec_clk_on,
 	.clk_off = rkvdec_clk_off,
+	.get_freq = rkvdec_get_freq,
 	.set_freq = rkvdec_set_freq,
 	.reduce_freq = rkvdec_reduce_freq,
 	.reset = rkvdec_reset,
@@ -821,6 +958,9 @@ static struct mpp_dev_ops rkvdec_v2_dev_ops = {
 	.finish = rkvdec_finish,
 	.result = rkvdec_result,
 	.free_task = rkvdec_free_task,
+	.ioctl = rkvdec_control,
+	.init_session = rkvdec_init_session,
+	.free_session = rkvdec_free_session,
 };
 
 static const struct mpp_dev_var rkvdec_v2_data = {
@@ -859,6 +999,10 @@ static int rkvdec_alloc_rcbbuf(struct platform_device *pdev, struct rkvdec_dev *
 	}
 	iova = PAGE_ALIGN(vals[0]);
 	rcb_size = PAGE_ALIGN(vals[1]);
+	if (!rcb_size) {
+		dev_err(dev, "rcb_size invalid.\n");
+		return -EINVAL;
+	}
 	/* alloc reserve iova for rcb */
 	ret = iommu_dma_reserve_iova(dev, iova, rcb_size);
 	if (ret) {

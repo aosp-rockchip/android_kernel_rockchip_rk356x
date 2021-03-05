@@ -9,7 +9,7 @@
 #include <linux/types.h>
 #include <linux/v4l2-controls.h>
 
-#define ISPP_API_VERSION		KERNEL_VERSION(1, 4, 1)
+#define ISPP_API_VERSION		KERNEL_VERSION(1, 5, 1)
 
 #define ISPP_ID_TNR			(0)
 #define ISPP_ID_NR			(1)
@@ -335,6 +335,7 @@ struct rkispp_params_cfg {
 	u32 module_cfg_update;
 	u32 module_init_ens;
 
+	u32 frame_id;
 	struct rkispp_tnr_config tnr_cfg;
 	struct rkispp_nr_config nr_cfg;
 	struct rkispp_sharp_config shp_cfg;

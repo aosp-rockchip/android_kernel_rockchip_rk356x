@@ -104,7 +104,7 @@ static struct rockchip_pmu *g_pmu;
 static void rockchip_pmu_lock(struct rockchip_pm_domain *pd)
 {
 	mutex_lock(&pd->pmu->mutex);
-	rockchip_dmcfreq_lock();
+	rockchip_dmcfreq_lock_nested();
 }
 
 static void rockchip_pmu_unlock(struct rockchip_pm_domain *pd)
@@ -1195,7 +1195,7 @@ err_out:
 }
 
 static const struct rockchip_domain_info px30_pm_domains[] = {
-	[PX30_PD_USB]		= DOMAIN_PX30(BIT(5),  BIT(5),  BIT(10), false),
+	[PX30_PD_USB]		= DOMAIN_PX30(BIT(5),  BIT(5),  BIT(10), true),
 	[PX30_PD_SDCARD]	= DOMAIN_PX30(BIT(8),  BIT(8),  BIT(9),  false),
 	[PX30_PD_GMAC]		= DOMAIN_PX30(BIT(10), BIT(10), BIT(6),  false),
 	[PX30_PD_MMC_NAND]	= DOMAIN_PX30(BIT(11), BIT(11), BIT(5),  false),
@@ -1214,7 +1214,7 @@ static const struct rockchip_domain_info rv1126_pm_domains[] = {
 	[RV1126_PD_VDPU]	= DOMAIN_RV1126(BIT(3), BIT(10), BIT(10), false),
 	[RV1126_PD_NVM]		= DOMAIN_RV1126(BIT(7), BIT(11), BIT(11),  false),
 	[RV1126_PD_SDIO]	= DOMAIN_RV1126(BIT(8), BIT(13), BIT(13),  false),
-	[RV1126_PD_USB]		= DOMAIN_RV1126(BIT(9), BIT(15), BIT(15),  false),
+	[RV1126_PD_USB]		= DOMAIN_RV1126(BIT(9), BIT(15), BIT(15),  true),
 	[RV1126_PD_NPU]		= DOMAIN_RV1126_O(BIT(0), BIT(2), BIT(18), 0x4, false),
 };
 

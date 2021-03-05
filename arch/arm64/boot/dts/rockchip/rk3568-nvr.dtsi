@@ -44,7 +44,7 @@
 	hdmi_sound: hdmi-sound {
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
-		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,mclk-fs = <128>;
 		simple-audio-card,name = "hdmi-sound";
 		status = "okay";
 
@@ -343,6 +343,8 @@
 };
 
 &rkvdec {
+	/delete-property/ rockchip,sram;
+	/delete-property/ rockchip,rcb-iova;
 	status = "okay";
 };
 

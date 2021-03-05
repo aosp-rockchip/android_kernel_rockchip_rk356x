@@ -40,6 +40,7 @@ struct rockchip_combphy_grfcfg {
 	struct combphy_reg pipe_txcomp_set;
 	struct combphy_reg pipe_clk_25m;
 	struct combphy_reg pipe_clk_100m;
+	struct combphy_reg pipe_phymode_sel;
 	struct combphy_reg pipe_rate_sel;
 	struct combphy_reg pipe_rxterm_sel;
 	struct combphy_reg pipe_txelec_sel;
@@ -463,11 +464,13 @@ static int rk3568_combphy_cfg(struct rockchip_combphy_priv *priv)
 		break;
 	case PHY_TYPE_SGMII:
 		param_write(priv->pipe_grf, &cfg->pipe_xpcs_phy_ready, true);
+		param_write(priv->phy_grf, &cfg->pipe_phymode_sel, true);
 		param_write(priv->phy_grf, &cfg->pipe_sel_qsgmii, true);
 		param_write(priv->phy_grf, &cfg->sgmii_mode_set, true);
 		break;
 	case PHY_TYPE_QSGMII:
 		param_write(priv->pipe_grf, &cfg->pipe_xpcs_phy_ready, true);
+		param_write(priv->phy_grf, &cfg->pipe_phymode_sel, true);
 		param_write(priv->phy_grf, &cfg->pipe_rate_sel, true);
 		param_write(priv->phy_grf, &cfg->pipe_sel_qsgmii, true);
 		param_write(priv->phy_grf, &cfg->qsgmii_mode_set, true);
@@ -500,26 +503,23 @@ static int rk3568_combphy_cfg(struct rockchip_combphy_priv *priv)
 	case 100000000:
 		param_write(priv->phy_grf, &cfg->pipe_clk_100m, true);
 		if (priv->mode == PHY_TYPE_PCIE) {
+			/* PLL KVCO tuning fine */
+			val = readl(priv->mmio + (0x20 << 2));
+			val &= ~(0x7 << 2);
+			val |= 0x2 << 2;
+			writel(val, priv->mmio + (0x20 << 2));
+
 			/* Enable controlling random jitter, aka RMJ */
-			val = readl(priv->mmio + (0xb << 2));
-			val &= ~(0x7);
-			val |= 0x1 << 6 | 0x6;
-			writel(val, priv->mmio + (0xb << 2));
+			writel(0x4, priv->mmio + (0xb << 2));
 
 			val = readl(priv->mmio + (0x5 << 2));
 			val &= ~(0x3 << 6);
 			val |= 0x1 << 6;
 			writel(val, priv->mmio + (0x5 << 2));
 
-			val = readl(priv->mmio + (0x11 << 2));
-			val &= ~(0x7f);
-			val |= 0x19;
-			writel(val, priv->mmio + (0x11 << 2));
+			writel(0x32, priv->mmio + (0x11 << 2));
+			writel(0xf0, priv->mmio + (0xa << 2));
 
-			val = readl(priv->mmio + (0xa << 2));
-			val &= ~(0xf << 4);
-			val |= 0x7 << 4;
-			writel(val, priv->mmio + (0xa << 2));
 		}
 		break;
 	default:
@@ -540,6 +540,12 @@ static int rk3568_combphy_cfg(struct rockchip_combphy_priv *priv)
 		}
 	}
 
+	if (device_property_read_bool(priv->dev, "rockchip,enable-ssc")) {
+		val = readl(priv->mmio + (0x7 << 2));
+		val |= BIT(4);
+		writel(val, priv->mmio + (0x7 << 2));
+	}
+
 	return 0;
 }
 
@@ -554,6 +560,7 @@ static const struct rockchip_combphy_grfcfg rk3568_combphy_grfcfgs = {
 	.pipe_txcomp_set	= { 0x0004, 4, 4, 0x00, 0x01 },
 	.pipe_clk_25m		= { 0x0004, 14, 13, 0x00, 0x01 },
 	.pipe_clk_100m		= { 0x0004, 14, 13, 0x00, 0x02 },
+	.pipe_phymode_sel	= { 0x0008, 1, 1, 0x00, 0x01 },
 	.pipe_rate_sel		= { 0x0008, 2, 2, 0x00, 0x01 },
 	.pipe_rxterm_sel	= { 0x0008, 8, 8, 0x00, 0x01 },
 	.pipe_txelec_sel	= { 0x0008, 12, 12, 0x00, 0x01 },

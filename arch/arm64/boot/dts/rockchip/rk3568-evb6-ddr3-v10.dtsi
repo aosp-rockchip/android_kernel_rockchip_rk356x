@@ -117,11 +117,11 @@
 };
 
 &dsi0_in_vp0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &dsi0_in_vp1 {
-	status = "disabled";
+	status = "okay";
 };
 
 &dsi0_panel {
@@ -251,6 +251,10 @@
 	status = "disabled";
 
 	/delete-node/ mxc6655xa@15;
+};
+
+&csi2_dphy_hw {
+	status = "okay";
 };
 
 &csi2_dphy0 {
@@ -387,6 +391,7 @@
 
 &route_dsi0 {
 	status = "okay";
+	connect = <&vp1_out_dsi0>;
 };
 
 &sdmmc1 {
