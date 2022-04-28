@@ -115,6 +115,8 @@ struct rockchip_hdmi {
 	int max_tmdsclk;
 	bool unsupported_yuv_input;
 	bool unsupported_deep_color;
+	bool mode_changed;
+	u8 id;
 
 	unsigned long bus_format;
 	unsigned long output_bus_format;
@@ -554,7 +556,11 @@ static const struct drm_encoder_funcs dw_hdmi_rockchip_encoder_funcs = {
 static void dw_hdmi_rockchip_encoder_disable(struct drm_encoder *encoder)
 {
 	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
+	struct drm_crtc *crtc = encoder->crtc;
+	struct rockchip_crtc_state *s = to_rockchip_crtc_state(crtc->state);
 
+	if (!hdmi->mode_changed)
+		s->output_if &= ~VOP_OUTPUT_IF_HDMI0;
 	/*
 	 * when plug out hdmi it will be switch cvbs and then phy bus width
 	 * must be set as 8
@@ -766,39 +772,47 @@ dw_hdmi_rockchip_select_output(struct drm_connector_state *conn_state,
 		else
 			*bus_format = MEDIA_BUS_FMT_UYYVYY8_0_5X24;
 		*bus_width = color_depth / 2;
+		hdmi->output_bus_format = *bus_format;
 	} else {
 		*output_mode = ROCKCHIP_OUT_MODE_AAAA;
+
 		if (color_depth > 8) {
-			if (*color_format != DRM_HDMI_OUTPUT_DEFAULT_RGB &&
-			    !hdmi->unsupported_yuv_input)
-				*bus_format = MEDIA_BUS_FMT_YUV10_1X30;
+			if (*color_format != DRM_HDMI_OUTPUT_DEFAULT_RGB)
+				hdmi->output_bus_format = MEDIA_BUS_FMT_YUV10_1X30;
+			else
+				hdmi->output_bus_format = MEDIA_BUS_FMT_RGB101010_1X30;
+
+			if (!hdmi->unsupported_yuv_input)
+				*bus_format = hdmi->output_bus_format;
 			else
 				*bus_format = MEDIA_BUS_FMT_RGB101010_1X30;
 		} else {
-			if (*color_format != DRM_HDMI_OUTPUT_DEFAULT_RGB &&
-			    !hdmi->unsupported_yuv_input)
-				*bus_format = MEDIA_BUS_FMT_YUV8_1X24;
+			if (*color_format != DRM_HDMI_OUTPUT_DEFAULT_RGB)
+				hdmi->output_bus_format = MEDIA_BUS_FMT_YUV8_1X24;
+			else
+				hdmi->output_bus_format = MEDIA_BUS_FMT_RGB888_1X24;
+
+			if (!hdmi->unsupported_yuv_input)
+				*bus_format = hdmi->output_bus_format;
 			else
 				*bus_format = MEDIA_BUS_FMT_RGB888_1X24;
 		}
-		if (*color_format == DRM_HDMI_OUTPUT_YCBCR422)
+
+		if (*color_format == DRM_HDMI_OUTPUT_YCBCR422) {
 			*bus_width = 8;
-		else
+
+			if (color_depth == 12)
+				hdmi->output_bus_format = MEDIA_BUS_FMT_UYVY12_1X24;
+			else if (color_depth == 10)
+				hdmi->output_bus_format = MEDIA_BUS_FMT_UYVY10_1X20;
+			else
+				hdmi->output_bus_format = MEDIA_BUS_FMT_UYVY8_1X16;
+		} else {
 			*bus_width = color_depth;
+		}
 	}
 
 	hdmi->bus_format = *bus_format;
-
-	if (*color_format == DRM_HDMI_OUTPUT_YCBCR422) {
-		if (color_depth == 12)
-			hdmi->output_bus_format = MEDIA_BUS_FMT_UYVY12_1X24;
-		else if (color_depth == 10)
-			hdmi->output_bus_format = MEDIA_BUS_FMT_UYVY10_1X20;
-		else
-			hdmi->output_bus_format = MEDIA_BUS_FMT_UYVY8_1X16;
-	} else {
-		hdmi->output_bus_format = *bus_format;
-	}
 }
 
 static bool
@@ -847,11 +861,13 @@ dw_hdmi_rockchip_encoder_atomic_check(struct drm_encoder *encoder,
 
 	s->output_type = DRM_MODE_CONNECTOR_HDMIA;
 	s->tv_state = &conn_state->tv;
-	s->output_if = VOP_OUTPUT_IF_HDMI0;
+	s->output_if |= VOP_OUTPUT_IF_HDMI0;
 
 	s->output_mode = output_mode;
 	s->bus_format = bus_format;
 	hdmi->bus_format = s->bus_format;
+
+	hdmi->mode_changed = crtc_state->mode_changed;
 
 	if (hdmi->enc_out_encoding == V4L2_YCBCR_ENC_BT2020)
 		s->color_space = V4L2_COLORSPACE_BT2020;
@@ -977,6 +993,7 @@ dw_hdmi_rockchip_attach_properties(struct drm_connector *connector,
 {
 	struct rockchip_hdmi *hdmi = (struct rockchip_hdmi *)data;
 	struct drm_property *prop;
+	struct rockchip_drm_private *private = connector->dev->dev_private;
 
 	switch (color) {
 	case MEDIA_BUS_FMT_RGB101010_1X30:
@@ -1092,6 +1109,7 @@ dw_hdmi_rockchip_attach_properties(struct drm_connector *connector,
 	prop = connector->dev->mode_config.hdr_output_metadata_property;
 	if (version >= 0x211a)
 		drm_object_attach_property(&connector->base, prop, 0);
+	drm_object_attach_property(&connector->base, private->connector_id_prop, 0);
 }
 
 static void
@@ -1178,7 +1196,7 @@ dw_hdmi_rockchip_set_property(struct drm_connector *connector,
 		return 0;
 	}
 
-	DRM_ERROR("failed to set rockchip hdmi connector property\n");
+	DRM_ERROR("failed to set rockchip hdmi connector property %s\n", property->name);
 	return -EINVAL;
 }
 
@@ -1192,6 +1210,7 @@ dw_hdmi_rockchip_get_property(struct drm_connector *connector,
 	struct rockchip_hdmi *hdmi = (struct rockchip_hdmi *)data;
 	struct drm_display_info *info = &connector->display_info;
 	struct drm_mode_config *config = &connector->dev->mode_config;
+	struct rockchip_drm_private *private = connector->dev->dev_private;
 
 	if (property == hdmi->color_depth_property) {
 		*val = hdmi->colordepth;
@@ -1237,9 +1256,12 @@ dw_hdmi_rockchip_get_property(struct drm_connector *connector,
 	} else if (property == hdmi->colorimetry_property) {
 		*val = hdmi->colorimetry;
 		return 0;
+	} else if (property == private->connector_id_prop) {
+		*val = hdmi->id;
+		return 0;
 	}
 
-	DRM_ERROR("failed to get rockchip hdmi connector property\n");
+	DRM_ERROR("failed to get rockchip hdmi connector property %s\n", property->name);
 	return -EINVAL;
 }
 
@@ -1473,7 +1495,7 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 	struct drm_device *drm = data;
 	struct drm_encoder *encoder;
 	struct rockchip_hdmi *hdmi;
-	int ret;
+	int ret, id;
 
 	if (!pdev->dev.of_node)
 		return -ENODEV;
@@ -1488,6 +1510,10 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 	if (!plat_data)
 		return -ENOMEM;
 
+	id = of_alias_get_id(dev->of_node, "hdmi");
+	if (id < 0)
+		id = 0;
+	hdmi->id = id;
 	hdmi->dev = &pdev->dev;
 	hdmi->chip_data = plat_data->phy_data;
 	plat_data->phy_data = hdmi;

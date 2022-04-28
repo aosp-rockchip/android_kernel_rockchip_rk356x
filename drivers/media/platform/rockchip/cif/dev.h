@@ -39,9 +39,15 @@
 #define CIF_MIPI_ID2_VDEV_NAME CIF_VIDEODEVICE_NAME	"_mipi_id2"
 #define CIF_MIPI_ID3_VDEV_NAME CIF_VIDEODEVICE_NAME	"_mipi_id3"
 
+#define CIF_DVP_ID0_VDEV_NAME CIF_VIDEODEVICE_NAME	"_dvp_id0"
+#define CIF_DVP_ID1_VDEV_NAME CIF_VIDEODEVICE_NAME	"_dvp_id1"
+#define CIF_DVP_ID2_VDEV_NAME CIF_VIDEODEVICE_NAME	"_dvp_id2"
+#define CIF_DVP_ID3_VDEV_NAME CIF_VIDEODEVICE_NAME	"_dvp_id3"
+
 /*
- * Rk1808 support 5 channel inputs simultaneously:
- * dvp + 4 mipi virtual channels
+ * RK1808 support 5 channel inputs simultaneously:
+ * dvp + 4 mipi virtual channels;
+ * RV1126/RK356X support 4 channels of BT.656/BT.1120/MIPI
  */
 #define RKCIF_MULTI_STREAMS_NUM	5
 #define RKCIF_STREAM_MIPI_ID0	0
@@ -50,6 +56,7 @@
 #define RKCIF_STREAM_MIPI_ID3	3
 #define RKCIF_MAX_STREAM_MIPI	4
 #define RKCIF_MAX_STREAM_LVDS	4
+#define RKCIF_MAX_STREAM_DVP	4
 #define RKCIF_STREAM_DVP	4
 
 #define RKCIF_MAX_SENSOR	2
@@ -58,6 +65,7 @@
 
 #define RKCIF_DEFAULT_WIDTH	640
 #define RKCIF_DEFAULT_HEIGHT	480
+#define RKCIF_FS_DETECTED_NUM	2
 
 /*
  * for HDR mode sync buf
@@ -158,12 +166,6 @@ struct rkcif_buffer {
 		u32 buff_addr[VIDEO_MAX_PLANES];
 		void *vaddr[VIDEO_MAX_PLANES];
 	};
-};
-
-struct rkcif_dummy_buffer {
-	void *vaddr;
-	dma_addr_t dma_addr;
-	u32 size;
 };
 
 extern int rkcif_debug;
@@ -355,6 +357,7 @@ struct rkcif_timer {
 	bool			is_buf_stop_update;
 	bool			is_running;
 	bool			is_csi2_err_occurred;
+	bool			has_been_init;
 	enum rkcif_monitor_mode	monitor_mode;
 	enum rkmodule_reset_src	reset_src;
 };
@@ -370,7 +373,8 @@ struct rkcif_extend_info {
  * @vbq_lock: lock to protect buf_queue
  * @buf_queue: queued buffer list
  * @dummy_buf: dummy space to store dropped data
- *
+ * @crop_enable: crop status when stream off
+ * @crop_dyn_en: crop status when streaming
  * rkcif use shadowsock registers, so it need two buffer at a time
  * @curr_buf: the buffer used for current frame
  * @next_buf: the buffer used for next frame
@@ -383,6 +387,7 @@ struct rkcif_stream {
 	enum rkcif_state		state;
 	bool				stopping;
 	bool				crop_enable;
+	bool				crop_dyn_en;
 	bool				is_compact;
 	wait_queue_head_t		wq_stopped;
 	unsigned int			frame_idx;
@@ -390,7 +395,6 @@ struct rkcif_stream {
 	unsigned int			crop_mask;
 	/* lock between irq and buf_queue */
 	struct list_head		buf_head;
-	struct rkcif_dummy_buffer	dummy_buf;
 	struct rkcif_buffer		*curr_buf;
 	struct rkcif_buffer		*next_buf;
 
@@ -405,6 +409,9 @@ struct rkcif_stream {
 	struct v4l2_rect		crop[CROP_SRC_MAX];
 	struct rkcif_fps_stats		fps_stats;
 	struct rkcif_extend_info	extend_line;
+	bool				is_dvp_yuv_addr_init;
+	bool				is_fs_fe_not_paired;
+	unsigned int			fs_cnt_in_single_frame;
 };
 
 struct rkcif_lvds_subdev {
@@ -502,10 +509,12 @@ struct rkcif_device {
 
 	struct notifier_block		reset_notifier; /* reset for mipi csi crc err */
 	struct rkcif_work_struct	reset_work;
+	bool				reset_work_cancel;
 	struct rkcif_timer		reset_watchdog_timer;
 	unsigned int			buf_wake_up_cnt;
 
 	bool				iommu_en;
+	unsigned int			dvp_sof_in_oneframe;
 };
 
 extern struct platform_driver rkcif_plat_drv;
@@ -546,5 +555,6 @@ int rkcif_reset_notifier(struct notifier_block *nb, unsigned long action, void *
 void rkcif_reset_watchdog_timer_handler(struct timer_list *t);
 void rkcif_config_dvp_clk_sampling_edge(struct rkcif_device *dev,
 					enum rkcif_clk_edge edge);
-
+void rkcif_enable_dvp_clk_dual_edge(struct rkcif_device *dev, bool on);
+void rkcif_reset_work(struct work_struct *work);
 #endif

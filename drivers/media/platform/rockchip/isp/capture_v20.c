@@ -116,6 +116,16 @@ static const struct capture_fmt dmatx_fmts[] = {
 		.fmt_type = FMT_YUV,
 		.bpp = { 16 },
 		.mplanes = 1,
+	}, {
+		.fourcc = V4l2_PIX_FMT_EBD8,
+		.fmt_type = FMT_EBD,
+		.bpp = { 8 },
+		.mplanes = 1,
+	}, {
+		.fourcc = V4l2_PIX_FMT_SPD16,
+		.fmt_type = FMT_SPD,
+		.bpp = { 16 },
+		.mplanes = 1,
 	}
 };
 
@@ -300,7 +310,7 @@ static int rkisp_create_hdr_buf(struct rkisp_device *dev)
 
 void hdr_destroy_buf(struct rkisp_device *dev)
 {
-	int i, j, max_dma, max_buf = 1;
+	int i, j;
 	struct rkisp_dummy_buffer *buf;
 
 	if (atomic_read(&dev->cap_dev.refcnt) > 1 ||
@@ -310,21 +320,14 @@ void hdr_destroy_buf(struct rkisp_device *dev)
 		return;
 
 	atomic_set(&dev->hdr.refcnt, 0);
-	max_dma = hdr_dma_frame(dev);
-	if (IS_HDR_RDBK(dev->hdr.op_mode)) {
-		if (!dev->dmarx_dev.trigger)
-			max_buf = HDR_MAX_DUMMY_BUF;
-		else
-			max_buf = 0;
-	}
-	for (i = 0; i < max_dma; i++) {
+	for (i = 0; i < HDR_DMA_MAX; i++) {
 		buf = dev->hdr.rx_cur_buf[i];
 		if (buf) {
 			rkisp_free_buffer(dev, buf);
 			dev->hdr.rx_cur_buf[i] = NULL;
 		}
 
-		for (j = 0; j < max_buf; j++) {
+		for (j = 0; j < HDR_MAX_DUMMY_BUF; j++) {
 			buf = hdr_dqbuf(&dev->hdr.q_tx[i]);
 			if (buf)
 				rkisp_free_buffer(dev, buf);
@@ -458,7 +461,7 @@ int hdr_config_dmatx(struct rkisp_device *dev)
 			pixm = stream->out_fmt;
 			stream = &dev->dmarx_dev.stream[RKISP_STREAM_RAWRD2];
 			rkisp_dmarx_set_fmt(stream, pixm);
-			mi_raw_length(stream);
+			stream->ops->config_mi(stream);
 		}
 	}
 
@@ -562,8 +565,9 @@ static int rkisp_stream_config_dcrop(struct rkisp_stream *stream, bool async)
 	src_h = input_win->height;
 
 	if (dev->isp_ver == ISP_V20 &&
-	    dev->csi_dev.rd_mode == HDR_RDBK_FRAME1 &&
-	    dev->isp_sdev.in_fmt.fmt_type == FMT_BAYER)
+	    dev->rd_mode == HDR_RDBK_FRAME1 &&
+	    dev->isp_sdev.in_fmt.fmt_type == FMT_BAYER &&
+	    dev->isp_sdev.out_fmt.fmt_type == FMT_YUV)
 		src_h += RKMODULE_EXTEND_LINE;
 
 	if (dcrop->width == src_w &&
@@ -1391,6 +1395,13 @@ static int mi_frame_end(struct rkisp_stream *stream)
 			ns = ktime_get_ns();
 		vb2_buf->timestamp = ns;
 
+		ns = ktime_get_ns();
+		stream->dbg.interval = ns - stream->dbg.timestamp;
+		stream->dbg.timestamp = ns;
+		stream->dbg.id = stream->curr_buf->vb.sequence;
+		if (stream->id == RKISP_STREAM_MP || stream->id == RKISP_STREAM_SP)
+			stream->dbg.delay = ns - dev->isp_sdev.frm_timestamp;
+
 		if (is_rdbk_stream(stream) &&
 		    dev->dmarx_dev.trigger == T_MANUAL) {
 			if (stream->id == RKISP_STREAM_DMATX0) {
@@ -1660,7 +1671,7 @@ static void rkisp_buf_queue(struct vb2_buffer *vb)
 	memset(ispbuf->buff_addr, 0, sizeof(ispbuf->buff_addr));
 	for (i = 0; i < isp_fmt->mplanes; i++) {
 		vb2_plane_vaddr(vb, i);
-		if (stream->ispdev->hw_dev->is_mmu) {
+		if (stream->ispdev->hw_dev->is_dma_sg_ops) {
 			sgt = vb2_dma_sg_plane_desc(vb, i);
 			ispbuf->buff_addr[i] = sg_dma_address(sgt->sgl);
 		} else {
@@ -1691,21 +1702,7 @@ static void rkisp_buf_queue(struct vb2_buffer *vb)
 		rkisp_bridge_sendtopp_buffer(stream->ispdev, stream->ispdev->dev_id, vb->index);
 
 	spin_lock_irqsave(&stream->vbq_lock, lock_flags);
-
-	/* XXX: replace dummy to speed up  */
-	if (stream->streaming &&
-	    !stream->next_buf &&
-	    !stream->interlaced &&
-	    stream->id != RKISP_STREAM_DMATX0 &&
-	    stream->id != RKISP_STREAM_DMATX1 &&
-	    stream->id != RKISP_STREAM_DMATX2 &&
-	    stream->id != RKISP_STREAM_DMATX3 &&
-	    atomic_read(&stream->ispdev->isp_sdev.frm_sync_seq) == 0) {
-		stream->next_buf = ispbuf;
-		stream->ops->update_mi(stream);
-	} else {
-		list_add_tail(&ispbuf->queue, &stream->buf_queue);
-	}
+	list_add_tail(&ispbuf->queue, &stream->buf_queue);
 	spin_unlock_irqrestore(&stream->vbq_lock, lock_flags);
 }
 
@@ -1815,10 +1812,6 @@ static void rkisp_stop_streaming(struct vb2_queue *queue)
 	rkisp_destroy_dummy_buf(stream);
 	atomic_dec(&dev->cap_dev.refcnt);
 	stream->start_stream = false;
-	if (stream->id == RKISP_STREAM_SP && stream->out_isp_fmt.fmt_type == FMT_FBCGAIN) {
-		stream->out_isp_fmt.fmt_type = FMT_YUV;
-		stream->out_isp_fmt.fourcc = V4L2_PIX_FMT_NV12;
-	}
 }
 
 static int rkisp_stream_start(struct rkisp_stream *stream)
@@ -1985,6 +1978,7 @@ static int rkisp_init_vb2_queue(struct vb2_queue *q,
 	q->bidirectional = 1;
 	if (stream->ispdev->hw_dev->is_dma_contig)
 		q->dma_attrs = DMA_ATTR_FORCE_CONTIGUOUS;
+	q->gfp_flags = GFP_DMA32;
 	return vb2_queue_init(q);
 }
 
@@ -2127,20 +2121,7 @@ void rkisp_spbuf_queue(struct rkisp_stream *stream, struct rkisp_buffer *sp_buf)
 	unsigned long lock_flags = 0;
 
 	spin_lock_irqsave(&stream->vbq_lock, lock_flags);
-	/* XXX: replace dummy to speed up  */
-	if (stream->streaming &&
-	    !stream->next_buf &&
-	    !stream->interlaced &&
-	    stream->id != RKISP_STREAM_DMATX0 &&
-	    stream->id != RKISP_STREAM_DMATX1 &&
-	    stream->id != RKISP_STREAM_DMATX2 &&
-	    stream->id != RKISP_STREAM_DMATX3 &&
-	    atomic_read(&stream->ispdev->isp_sdev.frm_sync_seq) == 0) {
-		stream->next_buf = sp_buf;
-		stream->ops->update_mi(stream);
-	} else {
-		list_add_tail(&sp_buf->queue, &stream->buf_queue);
-	}
+	list_add_tail(&sp_buf->queue, &stream->buf_queue);
 	spin_unlock_irqrestore(&stream->vbq_lock, lock_flags);
 }
 
@@ -2220,6 +2201,9 @@ void rkisp_mi_v20_isr(u32 mis_val, struct rkisp_device *dev)
 			end_tx1 = true;
 		if (i == RKISP_STREAM_DMATX2)
 			end_tx2 = true;
+		/* DMATX3 no csi frame end isr, mi isr instead */
+		if (i == RKISP_STREAM_DMATX3)
+			atomic_inc(&stream->sequence);
 
 		mi_frame_end_int_clear(stream);
 
@@ -2251,7 +2235,7 @@ void rkisp_mi_v20_isr(u32 mis_val, struct rkisp_device *dev)
 				end_tx0 = false;
 				end_tx1 = false;
 				end_tx2 = false;
-				rkisp_trigger_read_back(&dev->csi_dev, false, false);
+				rkisp_trigger_read_back(dev, false, false, false);
 			}
 		}
 	}
@@ -2265,17 +2249,28 @@ void rkisp_mipi_v20_isr(unsigned int phy, unsigned int packet,
 {
 	struct v4l2_device *v4l2_dev = &dev->v4l2_dev;
 	struct rkisp_stream *stream;
+	u32 packet_err = PACKET_ERR_F_BNDRY_MATCG | PACKET_ERR_F_SEQ |
+		PACKET_ERR_FRAME_DATA | PACKET_ERR_ECC_1BIT |
+		PACKET_ERR_ECC_2BIT | PACKET_ERR_CHECKSUM;
+	u32 state_err = RAW_WR_SIZE_ERR | RAW_RD_SIZE_ERR;
 	int i;
 
 	v4l2_dbg(3, rkisp_debug, &dev->v4l2_dev,
 		 "csi state:0x%x\n", state);
-	if (phy && (dev->isp_inp & INP_CSI))
+	dev->csi_dev.irq_cnt++;
+	if (phy && (dev->isp_inp & INP_CSI) &&
+	    dev->csi_dev.err_cnt++ < RKISP_CONTI_ERR_MAX)
 		v4l2_warn(v4l2_dev, "MIPI error: phy: 0x%08x\n", phy);
-	if (packet && (dev->isp_inp & INP_CSI))
+	if ((packet & packet_err) && (dev->isp_inp & INP_CSI) &&
+	    dev->csi_dev.err_cnt < RKISP_CONTI_ERR_MAX) {
+		if (packet & 0xfff)
+			dev->csi_dev.err_cnt++;
 		v4l2_warn(v4l2_dev, "MIPI error: packet: 0x%08x\n", packet);
-	if (overflow)
+	}
+	if (overflow &&
+	    dev->csi_dev.err_cnt++ < RKISP_CONTI_ERR_MAX)
 		v4l2_warn(v4l2_dev, "MIPI error: overflow: 0x%08x\n", overflow);
-	if (state & 0xeff00)
+	if (state & state_err)
 		v4l2_warn(v4l2_dev, "MIPI error: size: 0x%08x\n", state);
 	if (state & MIPI_DROP_FRM)
 		v4l2_warn(v4l2_dev, "MIPI drop frame\n");
@@ -2293,6 +2288,7 @@ void rkisp_mipi_v20_isr(unsigned int phy, unsigned int packet,
 		}
 	}
 	if (state & (RAW0_WR_FRAME | RAW1_WR_FRAME | RAW2_WR_FRAME)) {
+		dev->csi_dev.err_cnt = 0;
 		for (i = 0; i < HDR_DMA_MAX; i++) {
 			if (!((RAW0_WR_FRAME << i) & state))
 				continue;
@@ -2308,4 +2304,18 @@ void rkisp_mipi_v20_isr(unsigned int phy, unsigned int packet,
 	if (state & (RAW0_Y_STATE | RAW1_Y_STATE | RAW2_Y_STATE |
 	    RAW0_WR_FRAME | RAW1_WR_FRAME | RAW2_WR_FRAME))
 		rkisp_luma_isr(&dev->luma_vdev, state);
+
+	if (dev->csi_dev.err_cnt > RKISP_CONTI_ERR_MAX) {
+		if (!(dev->isp_state & ISP_MIPI_ERROR)) {
+			dev->isp_state |= ISP_MIPI_ERROR;
+			rkisp_write(dev, CSI2RX_MASK_PHY, 0, true);
+			rkisp_write(dev, CSI2RX_MASK_PACKET, 0, true);
+			rkisp_write(dev, CSI2RX_MASK_OVERFLOW, 0, true);
+			if (dev->hw_dev->monitor.is_en) {
+				if (!completion_done(&dev->hw_dev->monitor.cmpl))
+					complete(&dev->hw_dev->monitor.cmpl);
+				dev->hw_dev->monitor.state |= ISP_MIPI_ERROR;
+			}
+		}
+	}
 }

@@ -16,6 +16,9 @@
 
 #include "clk-regmap.h"
 
+#define RK628_PLL(_id, _name, _parent_name, _reg, _flags) \
+	PLL(_id, _name, _parent_name, _reg, 13, 12, 10, _flags)
+
 #define REG(x)			((x) + 0xc0000)
 
 #define CRU_CPLL_CON0		REG(0x0000)
@@ -76,17 +79,27 @@ struct rk628_cru {
 
 #define PNAME(x) static const char *const x[]
 
-PNAME(mux_cpll_osc_p) = { "xin_osc0_func", CNAME("clk_cpll") };
-PNAME(mux_gpll_osc_p) = { "xin_osc0_func", CNAME("clk_gpll") };
+PNAME(mux_cpll_osc_p) = { CNAME("xin_osc0_func"), CNAME("clk_cpll") };
+PNAME(mux_gpll_osc_p) = { CNAME("xin_osc0_func"), CNAME("clk_gpll") };
 PNAME(mux_cpll_gpll_mux_p) = { CNAME("clk_cpll_mux"), CNAME("clk_gpll_mux") };
-PNAME(mux_mclk_i2s_8ch_p) = { CNAME("clk_i2s_8ch_src"), CNAME("clk_i2s_8ch_frac"), "i2s_mclkin", "xin_osc0_half" };
-PNAME(mux_i2s_mclkout_p) = { CNAME("mclk_i2s_8ch"), "xin_osc0_half" };
+PNAME(mux_mclk_i2s_8ch_p) = { CNAME("clk_i2s_8ch_src"),
+			      CNAME("clk_i2s_8ch_frac"), CNAME("i2s_mclkin"),
+			      CNAME("xin_osc0_half") };
+PNAME(mux_i2s_mclkout_p) = { CNAME("mclk_i2s_8ch"), CNAME("xin_osc0_half") };
+PNAME(mux_clk_testout_p) = { CNAME("xin_osc0_func"), CNAME("xin_osc0_half"),
+			     CNAME("clk_gpll"), CNAME("clk_gpll_mux"),
+			     CNAME("clk_cpll"), CNAME("clk_gpll_mux"),
+			     CNAME("pclk_logic"), CNAME("sclk_vop"),
+			     CNAME("mclk_i2s_8ch"), CNAME("i2s_mclkout"),
+			     CNAME("dummy"), CNAME("clk_hdmirx_aud"),
+			     CNAME("clk_hdmirx_cec"), CNAME("clk_imodet"),
+			     CNAME("clk_txesc"), CNAME("clk_gpio_db0") };
 
 static const struct clk_pll_data rk628_clk_plls[] = {
-	RK628_PLL(CGU_CLK_CPLL, CNAME("clk_cpll"), "xin_osc0_func",
+	RK628_PLL(CGU_CLK_CPLL, CNAME("clk_cpll"), CNAME("xin_osc0_func"),
 		  CRU_CPLL_CON0,
 		  0),
-	RK628_PLL(CGU_CLK_GPLL, CNAME("clk_gpll"), "xin_osc0_func",
+	RK628_PLL(CGU_CLK_GPLL, CNAME("clk_gpll"), CNAME("xin_osc0_func"),
 		  CRU_GPLL_CON0,
 		  0),
 };
@@ -153,13 +166,13 @@ static const struct clk_gate_data rk628_clk_gates[] = {
 	GATE(CGU_PCLK_GVIHOST, CNAME("pclk_gvihost"), CNAME("pclk_logic"),
 	     CRU_GATE_CON02, 5,
 	     0),
-	GATE(CGU_CLK_CFG_DPHY0, CNAME("clk_cfg_dphy0"), "xin_osc0_func",
+	GATE(CGU_CLK_CFG_DPHY0, CNAME("clk_cfg_dphy0"), CNAME("xin_osc0_func"),
 	     CRU_GATE_CON02, 13,
 	     0),
-	GATE(CGU_CLK_CFG_DPHY1, CNAME("clk_cfg_dphy1"), "xin_osc0_func",
+	GATE(CGU_CLK_CFG_DPHY1, CNAME("clk_cfg_dphy1"), CNAME("xin_osc0_func"),
 	     CRU_GATE_CON02, 14,
 	     0),
-	GATE(CGU_CLK_TXESC, CNAME("clk_txesc"), "xin_osc0_func",
+	GATE(CGU_CLK_TXESC, CNAME("clk_txesc"), CNAME("xin_osc0_func"),
 	     CRU_GATE_CON02, 12,
 	     0),
 };
@@ -170,16 +183,19 @@ static const struct clk_composite_data rk628_clk_composites[] = {
 		  CRU_CLKSEL_CON05, 0, 5,
 		  CRU_GATE_CON02, 11,
 		  0),
-	COMPOSITE(CGU_CLK_HDMIRX_AUD, CNAME("clk_hdmirx_aud"), mux_cpll_gpll_mux_p,
+	COMPOSITE(CGU_CLK_HDMIRX_AUD, CNAME("clk_hdmirx_aud"),
+		  mux_cpll_gpll_mux_p,
 		  CRU_CLKSEL_CON05, 15, 1,
 		  CRU_CLKSEL_CON05, 6, 8,
 		  CRU_GATE_CON02, 10,
 		  CLK_SET_RATE_NO_REPARENT | CLK_SET_RATE_PARENT),
-	COMPOSITE_FRAC_NOMUX(CGU_CLK_HDMIRX_CEC, CNAME("clk_hdmirx_cec"), "xin_osc0_func",
+	COMPOSITE_FRAC_NOMUX(CGU_CLK_HDMIRX_CEC, CNAME("clk_hdmirx_cec"),
+			     CNAME("xin_osc0_func"),
 			     CRU_CLKSEL_CON12,
 			     CRU_GATE_CON01, 15,
 			     0),
-	COMPOSITE_FRAC(CGU_CLK_RX_READ, CNAME("clk_rx_read"), mux_cpll_gpll_mux_p,
+	COMPOSITE_FRAC(CGU_CLK_RX_READ, CNAME("clk_rx_read"),
+		       mux_cpll_gpll_mux_p,
 		       CRU_CLKSEL_CON02, 8, 1,
 		       CRU_CLKSEL_CON14,
 		       CRU_GATE_CON00, 11,
@@ -194,36 +210,44 @@ static const struct clk_composite_data rk628_clk_composites[] = {
 		  CRU_CLKSEL_CON00, 0, 5,
 		  CRU_GATE_CON00, 0,
 		  0),
-	COMPOSITE_NOMUX(CGU_CLK_GPIO_DB0, CNAME("clk_gpio_db0"), "xin_osc0_func",
-		  CRU_CLKSEL_CON08, 0, 10,
-		  CRU_GATE_CON01, 4,
-		  0),
-	COMPOSITE_NOMUX(CGU_CLK_GPIO_DB1, CNAME("clk_gpio_db1"), "xin_osc0_func",
-		  CRU_CLKSEL_CON09, 0, 10,
-		  CRU_GATE_CON01, 5,
-		  0),
-	COMPOSITE_NOMUX(CGU_CLK_GPIO_DB2, CNAME("clk_gpio_db2"), "xin_osc0_func",
-		  CRU_CLKSEL_CON10, 0, 10,
-		  CRU_GATE_CON01, 6,
-		  0),
-	COMPOSITE_NOMUX(CGU_CLK_GPIO_DB3, CNAME("clk_gpio_db3"), "xin_osc0_func",
-		  CRU_CLKSEL_CON11, 0, 10,
-		  CRU_GATE_CON01, 7,
-		  0),
-	COMPOSITE(CGU_CLK_I2S_8CH_SRC, CNAME("clk_i2s_8ch_src"), mux_cpll_gpll_mux_p,
+	COMPOSITE_NOMUX(CGU_CLK_GPIO_DB0, CNAME("clk_gpio_db0"),
+			CNAME("xin_osc0_func"),
+			CRU_CLKSEL_CON08, 0, 10,
+			CRU_GATE_CON01, 4,
+			0),
+	COMPOSITE_NOMUX(CGU_CLK_GPIO_DB1, CNAME("clk_gpio_db1"),
+			CNAME("xin_osc0_func"),
+			CRU_CLKSEL_CON09, 0, 10,
+			CRU_GATE_CON01, 5,
+			0),
+	COMPOSITE_NOMUX(CGU_CLK_GPIO_DB2, CNAME("clk_gpio_db2"),
+			CNAME("xin_osc0_func"),
+			CRU_CLKSEL_CON10, 0, 10,
+			CRU_GATE_CON01, 6,
+			0),
+	COMPOSITE_NOMUX(CGU_CLK_GPIO_DB3, CNAME("clk_gpio_db3"),
+			CNAME("xin_osc0_func"),
+			CRU_CLKSEL_CON11, 0, 10,
+			CRU_GATE_CON01, 7,
+			0),
+	COMPOSITE(CGU_CLK_I2S_8CH_SRC, CNAME("clk_i2s_8ch_src"),
+		  mux_cpll_gpll_mux_p,
 		  CRU_CLKSEL_CON03, 13, 1,
 		  CRU_CLKSEL_CON03, 8, 5,
 		  CRU_GATE_CON03, 9,
 		  0),
-	COMPOSITE_FRAC_NOMUX(CGU_CLK_I2S_8CH_FRAC, CNAME("clk_i2s_8ch_frac"), CNAME("clk_i2s_8ch_src"),
+	COMPOSITE_FRAC_NOMUX(CGU_CLK_I2S_8CH_FRAC, CNAME("clk_i2s_8ch_frac"),
+			     CNAME("clk_i2s_8ch_src"),
 			     CRU_CLKSEL_CON04,
 			     CRU_GATE_CON03, 10,
 			     0),
-	COMPOSITE_NODIV(CGU_MCLK_I2S_8CH, CNAME("mclk_i2s_8ch"), mux_mclk_i2s_8ch_p,
+	COMPOSITE_NODIV(CGU_MCLK_I2S_8CH, CNAME("mclk_i2s_8ch"),
+			mux_mclk_i2s_8ch_p,
 			CRU_CLKSEL_CON03, 14, 2,
 			CRU_GATE_CON03, 11,
 			CLK_SET_RATE_PARENT),
-	COMPOSITE_NODIV(CGU_I2S_MCLKOUT, CNAME("i2s_mclkout"), mux_i2s_mclkout_p,
+	COMPOSITE_NODIV(CGU_I2S_MCLKOUT, CNAME("i2s_mclkout"),
+			mux_i2s_mclkout_p,
 			CRU_CLKSEL_CON03, 7, 1,
 			CRU_GATE_CON03, 12,
 			CLK_SET_RATE_PARENT),
@@ -231,6 +255,11 @@ static const struct clk_composite_data rk628_clk_composites[] = {
 		  CRU_CLKSEL_CON02, 7, 1,
 		  CRU_CLKSEL_CON02, 0, 5,
 		  CRU_GATE_CON00, 12,
+		  0),
+	COMPOSITE(CGU_CLK_TESTOUT, CNAME("clk_testout"), mux_clk_testout_p,
+		  CRU_CLKSEL_CON06, 0, 4,
+		  CRU_CLKSEL_CON06, 8, 6,
+		  CRU_GATE_CON04, 7,
 		  0),
 };
 
@@ -462,26 +491,15 @@ static const struct regmap_config rk628_cru_regmap_config = {
 	.rd_table = &rk628_cru_readable_table,
 };
 
-static int rk628_cru_probe(struct platform_device *pdev)
+static void rk628_cru_init(struct rk628_cru *cru)
 {
-	struct rk628 *rk628 = dev_get_drvdata(pdev->dev.parent);
-	struct device *dev = &pdev->dev;
-	struct rk628_cru *cru;
-	struct clk **clk_table;
-	unsigned int i;
-	int ret;
+	u32 val = 0;
+	u8 mcu_mode;
 
-	cru = devm_kzalloc(dev, sizeof(*cru), GFP_KERNEL);
-	if (!cru)
-		return -ENOMEM;
-
-	cru->regmap = devm_regmap_init_i2c(rk628->client,
-					   &rk628_cru_regmap_config);
-	if (IS_ERR(cru->regmap)) {
-		ret = PTR_ERR(cru->regmap);
-		dev_err(dev, "failed to allocate register map: %d\n", ret);
-		return ret;
-	}
+	regmap_read(cru->parent->grf, GRF_SYSTEM_STATUS0, &val);
+	mcu_mode = (val & I2C_ONLY_FLAG) ? 0 : 1;
+	if (mcu_mode)
+		return;
 
 	/* clock switch and first set gpll almost 99MHz */
 	regmap_write(cru->regmap, CRU_GPLL_CON0, 0xffff701d);
@@ -511,6 +529,34 @@ static int rk628_cru_probe(struct platform_device *pdev)
 	usleep_range(1000, 1100);
 	/* set pclk use cpll, and set pclk 99MHz */
 	regmap_write(cru->regmap, CRU_CLKSEL_CON00, 0xff000b);
+}
+
+static int rk628_cru_probe(struct platform_device *pdev)
+{
+	struct rk628 *rk628 = dev_get_drvdata(pdev->dev.parent);
+	struct device *dev = &pdev->dev;
+	struct rk628_cru *cru;
+	struct clk **clk_table;
+	unsigned int i;
+	int ret;
+
+	cru = devm_kzalloc(dev, sizeof(*cru), GFP_KERNEL);
+	if (!cru)
+		return -ENOMEM;
+
+	cru->dev = dev;
+	cru->parent = rk628;
+	platform_set_drvdata(pdev, cru);
+
+	cru->regmap = devm_regmap_init_i2c(rk628->client,
+					   &rk628_cru_regmap_config);
+	if (IS_ERR(cru->regmap)) {
+		ret = PTR_ERR(cru->regmap);
+		dev_err(dev, "failed to allocate register map: %d\n", ret);
+		return ret;
+	}
+
+	rk628_cru_init(cru);
 
 	clk_table = devm_kcalloc(dev, CGU_NR_CLKS, sizeof(struct clk *),
 				 GFP_KERNEL);
@@ -520,11 +566,8 @@ static int rk628_cru_probe(struct platform_device *pdev)
 	for (i = 0; i < CGU_NR_CLKS; i++)
 		clk_table[i] = ERR_PTR(-ENOENT);
 
-	cru->dev = dev;
-	cru->parent = rk628;
 	cru->clk_data.clks = clk_table;
 	cru->clk_data.clk_num = CGU_NR_CLKS;
-	platform_set_drvdata(pdev, cru);
 
 	rk628_clk_register_plls(cru);
 	rk628_clk_register_muxes(cru);

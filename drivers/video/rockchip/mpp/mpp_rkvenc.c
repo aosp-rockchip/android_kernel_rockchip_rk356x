@@ -746,7 +746,7 @@ static int rkvenc_dump_session(struct mpp_session *session, struct seq_file *seq
 	}
 	seq_puts(seq, "\n");
 	/* item data*/
-	seq_printf(seq, "|%p|", session);
+	seq_printf(seq, "|%8p|", session);
 	seq_printf(seq, "%8s|", mpp_device_name[session->device_type]);
 	for (i = ENC_INFO_BASE; i < ENC_INFO_BUTT; i++) {
 		u32 flag = priv->codec_info[i].flag;
@@ -964,10 +964,11 @@ static struct monitor_dev_profile enc_mdevp = {
 static int rv1126_get_soc_info(struct device *dev, struct device_node *np,
 			       int *bin, int *process)
 {
-	int ret = 0, value = -EINVAL;
+	int ret = 0;
+	u8 value = 0;
 
 	if (of_property_match_string(np, "nvmem-cell-names", "performance") >= 0) {
-		ret = rockchip_get_efuse_value(np, "performance", &value);
+		ret = rockchip_nvmem_cell_read_u8(np, "performance", &value);
 		if (ret) {
 			dev_err(dev, "Failed to get soc performance value\n");
 			return ret;
@@ -1112,7 +1113,7 @@ static void rkvenc_iommu_handle_work(struct work_struct *work_s)
 	mpp_debug_enter();
 
 	/* avoid another page fault occur after page fault */
-	down_write(&mpp->iommu_info->rw_sem);
+	mpp_iommu_down_write(mpp->iommu_info);
 
 	if (enc->aux_iova != -1) {
 		iommu_unmap(mpp->iommu_info->domain, enc->aux_iova, IOMMU_PAGE_SIZE);
@@ -1129,7 +1130,7 @@ static void rkvenc_iommu_handle_work(struct work_struct *work_s)
 		enc->aux_iova = page_iova;
 
 	rk_iommu_unmask_irq(mpp->dev);
-	up_write(&mpp->iommu_info->rw_sem);
+	mpp_iommu_up_write(mpp->iommu_info);
 
 	mpp_debug_leave();
 }

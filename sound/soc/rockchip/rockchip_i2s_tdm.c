@@ -27,6 +27,7 @@
 #include <sound/dmaengine_pcm.h>
 
 #include "rockchip_i2s_tdm.h"
+#include "rockchip_pcm.h"
 
 #define DRV_NAME "rockchip-i2s-tdm"
 
@@ -216,6 +217,8 @@ static void rockchip_snd_xfer_reset_assert(struct rk_i2s_tdm_dev *i2s_tdm,
 		local_irq_restore(flags);
 		break;
 	}
+	/* delay for reset assert done */
+	udelay(10);
 }
 
 static void rockchip_snd_xfer_reset_deassert(struct rk_i2s_tdm_dev *i2s_tdm,
@@ -260,6 +263,8 @@ static void rockchip_snd_xfer_reset_deassert(struct rk_i2s_tdm_dev *i2s_tdm,
 		local_irq_restore(flags);
 		break;
 	}
+	/* delay for reset deassert done */
+	udelay(10);
 }
 
 /*
@@ -289,9 +294,6 @@ static void rockchip_snd_xfer_sync_reset(struct rk_i2s_tdm_dev *i2s_tdm)
 
 	rockchip_snd_xfer_reset_assert(i2s_tdm, tx_bank, tx_offset,
 				       rx_bank, rx_offset);
-
-	udelay(150);
-
 	rockchip_snd_xfer_reset_deassert(i2s_tdm, tx_bank, tx_offset,
 					 rx_bank, rx_offset);
 }
@@ -302,9 +304,10 @@ static void rockchip_snd_txrxctrl(struct snd_pcm_substream *substream,
 {
 	struct rk_i2s_tdm_dev *i2s_tdm = to_info(dai);
 	unsigned int val = 0;
+	unsigned long flags;
 	int retry = 10;
 
-	spin_lock(&i2s_tdm->lock);
+	spin_lock_irqsave(&i2s_tdm->lock, flags);
 	if (on) {
 		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
 			regmap_update_bits(i2s_tdm->regmap, I2S_DMACR,
@@ -359,7 +362,7 @@ static void rockchip_snd_txrxctrl(struct snd_pcm_substream *substream,
 			}
 		}
 	}
-	spin_unlock(&i2s_tdm->lock);
+	spin_unlock_irqrestore(&i2s_tdm->lock, flags);
 }
 
 static void rockchip_snd_reset(struct reset_control *rc)
@@ -926,11 +929,12 @@ static int rockchip_i2s_trcm_mode(struct snd_pcm_substream *substream,
 				  unsigned int fmt)
 {
 	struct rk_i2s_tdm_dev *i2s_tdm = to_info(dai);
+	unsigned long flags;
 
 	if (!i2s_tdm->clk_trcm)
 		return 0;
 
-	spin_lock(&i2s_tdm->lock);
+	spin_lock_irqsave(&i2s_tdm->lock, flags);
 	if (atomic_read(&i2s_tdm->refcount))
 		rockchip_i2s_tdm_xfer_pause(substream, i2s_tdm);
 
@@ -952,7 +956,7 @@ static int rockchip_i2s_trcm_mode(struct snd_pcm_substream *substream,
 
 	if (atomic_read(&i2s_tdm->refcount))
 		rockchip_i2s_tdm_xfer_resume(substream, i2s_tdm);
-	spin_unlock(&i2s_tdm->lock);
+	spin_unlock_irqrestore(&i2s_tdm->lock, flags);
 
 	return 0;
 }
@@ -1356,11 +1360,8 @@ static const struct txrx_config rk3308_txrx_config[] = {
 
 static const struct txrx_config rk3568_txrx_config[] = {
 	{ 0xfe410000, 0x504, RK3568_I2S1_CLK_TXONLY, RK3568_I2S1_CLK_RXONLY },
-	{ 0xfe410000, 0x508, RK3568_I2S1_MCLK_TX_OE, RK3568_I2S1_MCLK_RX_OE },
-	{ 0xfe420000, 0x508, RK3568_I2S2_MCLK_OE, RK3568_I2S2_MCLK_OE },
 	{ 0xfe430000, 0x504, RK3568_I2S3_CLK_TXONLY, RK3568_I2S3_CLK_RXONLY },
 	{ 0xfe430000, 0x508, RK3568_I2S3_MCLK_TXONLY, RK3568_I2S3_MCLK_RXONLY },
-	{ 0xfe430000, 0x508, RK3568_I2S3_MCLK_OE, RK3568_I2S3_MCLK_OE },
 };
 
 static const struct txrx_config rv1126_txrx_config[] = {
@@ -1621,6 +1622,7 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 	struct snd_soc_dai_driver *soc_dai;
 	struct resource *res;
 	void __iomem *regs;
+	bool sync;
 	int ret;
 	int val;
 
@@ -1668,7 +1670,11 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 	if (IS_ERR(i2s_tdm->grf))
 		return PTR_ERR(i2s_tdm->grf);
 
-	if (i2s_tdm->clk_trcm) {
+	sync = of_device_is_compatible(node, "rockchip,px30-i2s-tdm") ||
+	       of_device_is_compatible(node, "rockchip,rk1808-i2s-tdm") ||
+	       of_device_is_compatible(node, "rockchip,rk3308-i2s-tdm");
+
+	if (i2s_tdm->clk_trcm && sync) {
 		cru_node = of_parse_phandle(node, "rockchip,cru", 0);
 		i2s_tdm->cru_base = of_iomap(cru_node, 0);
 		if (!i2s_tdm->cru_base)
@@ -1797,7 +1803,7 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 
 	if (of_property_read_bool(node, "rockchip,no-dmaengine"))
 		return ret;
-	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
+	ret = rockchip_pcm_platform_register(&pdev->dev);
 	if (ret) {
 		dev_err(&pdev->dev, "Could not register PCM\n");
 		return ret;

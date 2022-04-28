@@ -29,7 +29,8 @@ struct buf_info_s {
 	int dsp_buf_list_status;
 	struct ebc_buf_s *osd_buf;
 
-	struct mutex dsp_lock;
+	struct mutex dsp_buf_lock;
+	struct mutex ebc_buf_lock;
 };
 
 static struct buf_info_s ebc_buf_info;
@@ -56,14 +57,14 @@ int ebc_buf_release(struct ebc_buf_s  *release_buf)
 
 int ebc_remove_from_dsp_buf_list(struct ebc_buf_s *remove_buf)
 {
-	mutex_lock(&ebc_buf_info.dsp_lock);
+	mutex_lock(&ebc_buf_info.dsp_buf_lock);
 	if (ebc_buf_info.dsp_buf_list) {
 		int pos;
 
 		pos = buf_list_get_pos(ebc_buf_info.dsp_buf_list, (int *)remove_buf);
 		buf_list_remove(ebc_buf_info.dsp_buf_list, pos);
 	}
-	mutex_unlock(&ebc_buf_info.dsp_lock);
+	mutex_unlock(&ebc_buf_info.dsp_buf_lock);
 
 	return BUF_SUCCESS;
 }
@@ -74,40 +75,39 @@ int ebc_add_to_dsp_buf_list(struct ebc_buf_s *dsp_buf)
 	int temp_pos;
 	int is_full_mode = 0;
 
-	mutex_lock(&ebc_buf_info.dsp_lock);
+	mutex_lock(&ebc_buf_info.dsp_buf_lock);
 	if (ebc_buf_info.dsp_buf_list) {
 		switch (dsp_buf->buf_mode) {
-		case EPD_DU:
+		case EPD_OVERLAY:
+			break;
+		case EPD_A2_ENTER:
 		case EPD_SUSPEND:
 		case EPD_RESUME:
 		case EPD_POWER_OFF:
-		case EPD_OVERLAY:
 		case EPD_RESET:
-			break;
-
+		case EPD_FORCE_FULL:
+			/*
+			 * add system display buf to dsp buf list directly when dsp buf list is not full,
+			 * otherwise, we need to remove some bufs from dsp buf list.
+			 */
+			if (ebc_buf_info.dsp_buf_list->nb_elt < ebc_buf_info.dsp_buf_list->maxelements)
+				break;
+			/* fallthrough */
 		default:
 			if (ebc_buf_info.dsp_buf_list->nb_elt > 1) {
 				temp_pos = ebc_buf_info.dsp_buf_list->nb_elt;
 				while (--temp_pos) {
 					temp_buf = (struct ebc_buf_s *)buf_list_get(ebc_buf_info.dsp_buf_list, temp_pos);
-					if ((temp_buf->buf_mode != EPD_FULL_GC16) &&
-					    (temp_buf->buf_mode != EPD_FULL_GL16) &&
-					    (temp_buf->buf_mode != EPD_FULL_GLR16) &&
-					    (temp_buf->buf_mode != EPD_FULL_GLD16) &&
-					    (temp_buf->buf_mode != EPD_FULL_GCC16) &&
-					    (temp_buf->buf_mode != EPD_OVERLAY) &&
-					    (temp_buf->buf_mode != EPD_DU) &&
-					    (temp_buf->buf_mode != EPD_SUSPEND) &&
-					    (temp_buf->buf_mode != EPD_RESUME) &&
-					    (temp_buf->buf_mode != EPD_POWER_OFF)) {
+					if (temp_buf->buf_mode == EPD_OVERLAY) {
+						continue;
+					} else if (((temp_buf->buf_mode >= EPD_FULL_GC16) && (temp_buf->buf_mode <= EPD_DU4))
+						|| (temp_buf->buf_mode == EPD_AUTO)) {
 						buf_list_remove(ebc_buf_info.dsp_buf_list, temp_pos);
 						ebc_buf_release(temp_buf);
-					} else if ((1 == is_full_mode) &&
-						   (temp_buf->buf_mode != EPD_DU) &&
-						   (temp_buf->buf_mode != EPD_OVERLAY) &&
-						   (temp_buf->buf_mode != EPD_SUSPEND) &&
-						   (temp_buf->buf_mode != EPD_RESUME) &&
-						   (temp_buf->buf_mode != EPD_POWER_OFF)) {
+					} else if ((1 == is_full_mode)
+							&& (temp_buf->buf_mode != EPD_SUSPEND)
+							&& (temp_buf->buf_mode != EPD_RESUME)
+							&& (temp_buf->buf_mode != EPD_POWER_OFF)) {
 						buf_list_remove(ebc_buf_info.dsp_buf_list, temp_pos);
 						ebc_buf_release(temp_buf);
 					} else {
@@ -118,13 +118,17 @@ int ebc_add_to_dsp_buf_list(struct ebc_buf_s *dsp_buf)
 			break;
 		}
 
-		dsp_buf->status = buf_dsp;
 		if (-1 == buf_list_add(ebc_buf_info.dsp_buf_list, (int *)dsp_buf, -1)) {
-			mutex_unlock(&ebc_buf_info.dsp_lock);
+			ebc_buf_release(dsp_buf);
+			mutex_unlock(&ebc_buf_info.dsp_buf_lock);
 			return BUF_ERROR;
 		}
+
+		if (dsp_buf->status != buf_osd)
+			dsp_buf->status = buf_dsp;
+
 	}
-	mutex_unlock(&ebc_buf_info.dsp_lock);
+	mutex_unlock(&ebc_buf_info.dsp_buf_lock);
 
 	return BUF_SUCCESS;
 }
@@ -155,10 +159,10 @@ struct ebc_buf_s *ebc_dsp_buf_get(void)
 {
 	struct ebc_buf_s *buf = NULL;
 
-	mutex_lock(&ebc_buf_info.dsp_lock);
+	mutex_lock(&ebc_buf_info.dsp_buf_lock);
 	if (ebc_buf_info.dsp_buf_list && (ebc_buf_info.dsp_buf_list->nb_elt > 0))
 		buf = (struct ebc_buf_s *)buf_list_get(ebc_buf_info.dsp_buf_list, 0);
-	mutex_unlock(&ebc_buf_info.dsp_lock);
+	mutex_unlock(&ebc_buf_info.dsp_buf_lock);
 
 	return buf;
 }
@@ -187,10 +191,11 @@ struct ebc_buf_s *ebc_osd_buf_clone(void)
 
 struct ebc_buf_s *ebc_empty_buf_get(void)
 {
-	struct ebc_buf_s *temp_buf;
+	struct ebc_buf_s *temp_buf = NULL;
 	int temp_pos;
 
-	if (ebc_buf_info.buf_list) {
+	mutex_lock(&ebc_buf_info.ebc_buf_lock);
+	while (ebc_buf_info.buf_list) {
 		temp_pos = 0;
 
 		while (temp_pos < ebc_buf_info.buf_list->nb_elt) {
@@ -199,22 +204,21 @@ struct ebc_buf_s *ebc_empty_buf_get(void)
 				if (temp_buf->status == buf_idle) {
 					temp_buf->status = buf_user;
 					memcpy(temp_buf->tid_name, current->comm, TASK_COMM_LEN); //store user thread name
-					return temp_buf;
+					goto OUT;
 				}
 				// one tid only can get one buf at one time
 				else if ((temp_buf->status == buf_user) && (!strncmp(temp_buf->tid_name, current->comm, TASK_COMM_LEN - 7))) {
-					return temp_buf;
+					goto OUT;
 				}
 			}
 		}
 		ebc_buf_info.use_buf_is_empty = 1;
-
 		wait_event_interruptible(ebc_buf_wq, ebc_buf_info.use_buf_is_empty != 1);
-
-		return ebc_empty_buf_get();
 	}
 
-	return NULL;
+OUT:
+	mutex_unlock(&ebc_buf_info.ebc_buf_lock);
+	return temp_buf;
 }
 
 unsigned long ebc_phy_buf_base_get(void)
@@ -225,6 +229,23 @@ unsigned long ebc_phy_buf_base_get(void)
 char *ebc_virt_buf_base_get(void)
 {
 	return ebc_buf_info.virt_mem_base;
+}
+
+int ebc_buf_state_show(char *buf)
+{
+	int i;
+	int ret = 0;
+	struct ebc_buf_s *temp_buf;
+
+	ret += sprintf(buf, "dsp_buf num = %d\n", ebc_buf_info.dsp_buf_list->nb_elt);
+	if (ebc_buf_info.buf_list) {
+		for (i = 0; i < ebc_buf_info.buf_list->nb_elt; i++) {
+			temp_buf = (struct ebc_buf_s *)buf_list_get(ebc_buf_info.buf_list, i);
+			ret += sprintf(buf + ret, "ebc_buf[%d]: s = %d, m = %d\n", i, temp_buf->status, temp_buf->buf_mode);
+		}
+	}
+
+	return ret;
 }
 
 int ebc_buf_uninit(void)
@@ -260,7 +281,8 @@ int ebc_buf_init(unsigned long phy_start, char *mem_start, int men_len, int dest
 	if (NULL == mem_start)
 		return BUF_ERROR;
 
-	mutex_init(&ebc_buf_info.dsp_lock);
+	mutex_init(&ebc_buf_info.dsp_buf_lock);
+	mutex_init(&ebc_buf_info.ebc_buf_lock);
 
 	if (buf_list_init(&ebc_buf_info.buf_list, BUF_LIST_MAX_NUMBER))
 		return BUF_ERROR;

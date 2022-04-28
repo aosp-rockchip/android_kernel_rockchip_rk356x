@@ -854,6 +854,7 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rv1126-ai-cam-ddr3-v1.dtb \
 	rv1126-ai-cam-ddr3-v1-spi-nand.dtb \
 	rv1126-ai-cam-plus.dtb \
+	rv1126-bat-evb-v10.dtb \
 	rv1126-bat-ipc-v10.dtb \
 	rv1126-bat-ipc-4k-v10.dtb \
 	rv1126-evb-ddr3-v10.dtb \
@@ -897,7 +898,9 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3288-evb-rk808.dtb \
 	rk3288-evb-android-rk808-edp-avb.dtb \
 	rk3288-evb-rk628-hdmi2csi-avb.dtb \
+	rk3288-evb-rk628-hdmi2gvi-avb.dtb \
 	rk3288-evb-rk628-rgb2dsi-avb.dtb \
+	rk3288-evb-rk628-rgb2gvi-avb.dtb \
 	rk3288-evb-rk628-rgb2hdmi-avb.dtb \
 	rk3288-evb-rk628-rgb2lvds-avb.dtb \
 	rk3288-evb-rk628-rgb2lvds-dual-avb.dtb \

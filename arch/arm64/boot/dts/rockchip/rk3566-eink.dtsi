@@ -9,12 +9,12 @@
 		#size-cells = <2>;
 		ranges;
 
-		waveform_reserved: waveform@0x10000000 {
-			reg = <0x0 0x10000000 0x0 0x100000>;
+		waveform_reserved: waveform@10800000 {
+			reg = <0x0 0x10800000 0x0 0x100000>;
 		};
 
-		display_reserved: framebuffer@10100000 {
-			reg = <0x0 0x10100000 0x0 0x2000000>;
+		display_reserved: framebuffer@10900000 {
+			reg = <0x0 0x10900000 0x0 0x2000000>;
 		};
 	};
 
@@ -46,27 +46,26 @@
 };
 
 &dmc {
-	system-status-freq = <
-		/*system status         freq(KHz)*/
-		SYS_STATUS_NORMAL       528000
-		SYS_STATUS_REBOOT       528000
-		SYS_STATUS_SUSPEND      324000
-		SYS_STATUS_LOW_POWER	324000
-	>;
 	center-supply = <&vdd_logic>;
 	auto-freq-en = <0>;
+	system-status-level = <
+		/*system status         freq level*/
+		SYS_STATUS_NORMAL       DMC_FREQ_LEVEL_HIGH
+		SYS_STATUS_REBOOT       DMC_FREQ_LEVEL_HIGH
+		SYS_STATUS_SUSPEND      DMC_FREQ_LEVEL_LOW
+	>;
 	status = "okay";
 };
 
 &dmc_opp_table {
 	opp-324000000 {
-		opp-microvolt = <825000>;
+		opp-hz = /bits/ 64 <324000000>;
+		opp-microvolt = <875000>;
 	};
 	opp-528000000 {
-		opp-microvolt = <825000>;
+		opp-hz = /bits/ 64 <528000000>;
+		opp-microvolt = <875000>;
 	};
-	/delete-node/ opp-780000000;
-	/delete-node/ opp-1056000000;
 };
 
 &ebc {
@@ -87,3 +86,21 @@
 		opp-microvolt = <825000>;
 	};
 };
+
+&rockchip_suspend {
+	status = "okay";
+
+	rockchip,sleep-debug-en = <0>;
+	rockchip,sleep-mode-config = <
+		(0
+		| RKPM_SLP_ARMOFF_LOGOFF
+		| RKPM_SLP_CENTER_OFF
+		| RKPM_SLP_HW_PLLS_OFF
+		| RKPM_SLP_PMUALIVE_32K
+		| RKPM_SLP_OSC_DIS
+		| RKPM_SLP_PMIC_LP
+		| RKPM_SLP_32K_PVTM
+		)
+	>;
+};
+

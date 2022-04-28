@@ -30,6 +30,7 @@ struct rkispp_hw_dev {
 	void __iomem *base_addr;
 	const struct ispp_match_data *match_data;
 	const struct ispp_clk_info *clk_rate_tbl;
+	struct reset_control *reset;
 	struct clk *clks[ISPP_MAX_BUS_CLK];
 	struct rkispp_device *ispp[DEV_MAX];
 	struct rkispp_isp_buf_pool pool[RKISPP_BUF_POOL_MAX];
@@ -52,11 +53,16 @@ struct rkispp_hw_dev {
 	atomic_t refcnt;
 	const struct vb2_mem_ops *mem_ops;
 	struct rkisp_ispp_reg *reg_buf;
+	u32 first_frame_dma;
 	bool is_mmu;
 	bool is_idle;
 	bool is_single;
 	bool is_fec_ext;
 	bool is_dma_contig;
+	bool is_dma_sg_ops;
 	bool is_shutdown;
+	bool is_first;
 };
+
+void rkispp_soft_reset(struct rkispp_hw_dev *hw_dev);
 #endif

@@ -95,7 +95,12 @@ static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
 	struct snd_uac_chip *uac = prm->uac;
 
 	/* i/f shutting down */
-	if (!prm->ep_enabled || req->status == -ESHUTDOWN)
+	if (!prm->ep_enabled) {
+		usb_ep_free_request(ep, req);
+		return;
+	}
+
+	if (req->status == -ESHUTDOWN)
 		return;
 
 	/*
@@ -402,8 +407,14 @@ static inline void free_ep(struct uac_rtd_params *prm, struct usb_ep *ep)
 
 	for (i = 0; i < params->req_number; i++) {
 		if (prm->ureq[i].req) {
-			usb_ep_dequeue(ep, prm->ureq[i].req);
-			usb_ep_free_request(ep, prm->ureq[i].req);
+			if (usb_ep_dequeue(ep, prm->ureq[i].req))
+				usb_ep_free_request(ep, prm->ureq[i].req);
+			/*
+			 * If usb_ep_dequeue() cannot successfully dequeue the
+			 * request, the request will be freed by the completion
+			 * callback.
+			 */
+
 			prm->ureq[i].req = NULL;
 		}
 	}
@@ -573,7 +584,7 @@ int u_audio_start_playback(struct g_audio *audio_dev)
 {
 	struct snd_uac_chip *uac = audio_dev->uac;
 	struct usb_gadget *gadget = audio_dev->gadget;
-	struct device *dev = &gadget->dev;
+	struct device *dev = audio_dev->device;
 	struct usb_request *req;
 	struct usb_ep *ep;
 	struct uac_rtd_params *prm;
@@ -668,6 +679,10 @@ EXPORT_SYMBOL_GPL(u_audio_fu_set_cmd);
 
 int u_audio_fu_get_cmd(struct usb_audio_control *con, u8 cmd)
 {
+	struct g_audio *audio_dev = (struct g_audio *)con->context;
+
+	dev_dbg(audio_dev->device, "GET_CMD con %s cmd %d data %d\n",
+		con->name, cmd, (int16_t)con->data[cmd]);
 	return con->data[cmd];
 }
 EXPORT_SYMBOL_GPL(u_audio_fu_get_cmd);
@@ -676,8 +691,6 @@ static void g_audio_work(struct work_struct *data)
 {
 	struct g_audio *audio = container_of(data, struct g_audio, work);
 	struct uac_params *params = &audio->params;
-	struct usb_gadget *gadget = audio->gadget;
-	struct device *dev = &gadget->dev;
 	char *uac_event[4]  = { NULL, NULL, NULL, NULL };
 	char str[19];
 	signed short volume;
@@ -753,8 +766,8 @@ static void g_audio_work(struct work_struct *data)
 		audio->usb_state[i] = false;
 		kobject_uevent_env(&audio->device->kobj, KOBJ_CHANGE,
 				   uac_event);
-		dev_dbg(dev, "%s: sent uac uevent %s %s %s\n", __func__,
-			uac_event[0], uac_event[1], uac_event[2]);
+		dev_dbg(audio->device, "%s: sent uac uevent %s %s %s\n",
+			__func__, uac_event[0], uac_event[1], uac_event[2]);
 	}
 }
 
@@ -776,7 +789,7 @@ static void ppm_calculate_work(struct work_struct *data)
 
 	if (g_audio->fn->time_last &&
 	    time_now - g_audio->fn->time_last > 1500000000ULL)
-		dev_warn(&gadget->dev, "PPM work scheduled too slow!\n");
+		dev_warn(g_audio->device, "PPM work scheduled too slow!\n");
 
 	g_audio->fn->time_last = time_now;
 
@@ -789,7 +802,7 @@ static void ppm_calculate_work(struct work_struct *data)
 	 */
 	if (gadget->state != USB_STATE_CONFIGURED) {
 		memset(g_audio->fn, 0, sizeof(*g_audio->fn));
-		dev_dbg(&gadget->dev, "Disconnect. frame number is cleared\n");
+		dev_dbg(g_audio->device, "Disconnect. frame number is cleared\n");
 		goto out;
 	}
 
@@ -834,7 +847,7 @@ static void ppm_calculate_work(struct work_struct *data)
 	ppm_sum = ppm_sum - ppms[cnt] + ppm;
 	ppms[cnt] = ppm;
 
-	dev_dbg(&g_audio->gadget->dev,
+	dev_dbg(g_audio->device,
 		"frame %u msec %u ppm_calc %d ppm_avage(%d) %d\n",
 		fn_msec, clk_msec, ppm, CLK_PPM_GROUP_SIZE,
 		ppm_sum / CLK_PPM_GROUP_SIZE);
@@ -1021,6 +1034,9 @@ void g_audio_cleanup(struct g_audio *g_audio)
 	card = uac->card;
 	if (card)
 		snd_card_free(card);
+
+	free_ep(&uac->c_prm, g_audio->out_ep);
+	free_ep(&uac->p_prm, g_audio->in_ep);
 
 	kfree(uac->p_prm.ureq);
 	kfree(uac->c_prm.ureq);

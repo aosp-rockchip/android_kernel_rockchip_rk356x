@@ -46,7 +46,7 @@ static int rkispp_stats_frame_end(struct rkispp_stats_vdev *stats_vdev)
 	if (stats_vdev->curr_buf) {
 		u64 ns = ktime_get_ns();
 		u32 total_num = readl(base + RKISPP_ORB_TOTAL_NUM);
-		u32 cur_frame_id = atomic_read(&dev->ispp_sdev.frm_sync_seq) - 1;
+		u32 cur_frame_id = dev->ispp_sdev.frm_sync_seq;
 		void *vaddr;
 
 		curr_buf = stats_vdev->curr_buf;
@@ -308,7 +308,7 @@ static int rkispp_stats_init_vb2_queue(struct vb2_queue *q,
 	q->dev = stats_vdev->dev->hw_dev->dev;
 	if (stats_vdev->dev->hw_dev->is_dma_contig)
 		q->dma_attrs = DMA_ATTR_FORCE_CONTIGUOUS;
-
+	q->gfp_flags = GFP_DMA32;
 	return vb2_queue_init(q);
 }
 

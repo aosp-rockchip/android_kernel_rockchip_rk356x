@@ -58,7 +58,11 @@
  *
  **********************************************************************/
 
+#if IS_ENABLED(CONFIG_DRM_ROCKCHIP_VVOP)
+static bool is_support_iommu = false;
+#else
 static bool is_support_iommu = true;
+#endif
 static struct drm_driver rockchip_drm_driver;
 
 struct rockchip_drm_mode_set {
@@ -67,6 +71,7 @@ struct rockchip_drm_mode_set {
 	struct drm_connector *connector;
 	struct drm_crtc *crtc;
 	struct drm_display_mode *mode;
+	int clock;
 	int hdisplay;
 	int vdisplay;
 	int vrefresh;
@@ -79,6 +84,11 @@ struct rockchip_drm_mode_set {
 	int right_margin;
 	int top_margin;
 	int bottom_margin;
+
+	unsigned int brightness;
+	unsigned int contrast;
+	unsigned int saturation;
+	unsigned int hue;
 
 	bool mode_changed;
 	int ratio;
@@ -106,15 +116,18 @@ EXPORT_SYMBOL(rockchip_drm_unregister_sub_dev);
 struct rockchip_drm_sub_dev *rockchip_drm_get_sub_dev(struct device_node *node)
 {
 	struct rockchip_drm_sub_dev *sub_dev = NULL;
+	bool found = false;
 
 	mutex_lock(&rockchip_drm_sub_dev_lock);
 	list_for_each_entry(sub_dev, &rockchip_drm_sub_dev_list, list) {
-		if (sub_dev->of_node == node)
+		if (sub_dev->of_node == node) {
+			found = true;
 			break;
+		}
 	}
 	mutex_unlock(&rockchip_drm_sub_dev_lock);
 
-	return sub_dev;
+	return found ? sub_dev : NULL;
 }
 EXPORT_SYMBOL(rockchip_drm_get_sub_dev);
 
@@ -157,6 +170,10 @@ static const struct drm_display_mode rockchip_drm_default_modes[] = {
 		   1760, 1980, 0, 720, 725, 730, 750, 0,
 		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC),
 	  .vrefresh = 50, .picture_aspect_ratio = HDMI_PICTURE_ASPECT_16_9, },
+	/* 0x10 - 1024x768@60Hz */
+	{ DRM_MODE("1024x768", DRM_MODE_TYPE_DRIVER, 65000, 1024, 1048,
+		   1184, 1344, 0,  768, 771, 777, 806, 0,
+		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC) },
 	/* 17 - 720x576@50Hz 4:3 */
 	{ DRM_MODE("720x576", DRM_MODE_TYPE_DRIVER, 27000, 720, 732,
 		   796, 864, 0, 576, 581, 586, 625, 0,
@@ -324,9 +341,13 @@ static int init_loader_memory(struct drm_device *drm_dev)
 	phys_addr_t start, size;
 	u32 pg_size = PAGE_SIZE;
 	struct resource res;
-	int ret;
+	int ret, idx;
 
-	node = of_parse_phandle(np, "logo-memory-region", 0);
+	idx = of_property_match_string(np, "memory-region-names", "drm-logo");
+	if (idx >= 0)
+		node = of_parse_phandle(np, "memory-region", idx);
+	else
+		node = of_parse_phandle(np, "logo-memory-region", 0);
 	if (!node)
 		return -ENOMEM;
 
@@ -359,6 +380,33 @@ static int init_loader_memory(struct drm_device *drm_dev)
 	logo->size = size;
 	logo->count = 1;
 	private->logo = logo;
+
+	idx = of_property_match_string(np, "memory-region-names", "drm-cubic-lut");
+	if (idx < 0)
+		return 0;
+
+	node = of_parse_phandle(np, "memory-region", idx);
+	if (!node)
+		return -ENOMEM;
+
+	ret = of_address_to_resource(node, 0, &res);
+	if (ret)
+		return ret;
+	start = ALIGN_DOWN(res.start, pg_size);
+	size = resource_size(&res);
+	if (!size)
+		return 0;
+
+	private->cubic_lut_kvaddr = phys_to_virt(start);
+	if (private->domain) {
+		ret = iommu_map(private->domain, start, start, ALIGN(size, pg_size),
+				IOMMU_WRITE | IOMMU_READ);
+		if (ret) {
+			dev_err(drm_dev->dev, "failed to create 1v1 mapping for cubic lut\n");
+			goto err_free_logo;
+		}
+	}
+	private->cubic_lut_dma_addr = start;
 
 	return 0;
 
@@ -426,6 +474,7 @@ get_framebuffer_by_node(struct drm_device *drm_dev, struct device_node *node)
 static struct rockchip_drm_mode_set *
 of_parse_display_resource(struct drm_device *drm_dev, struct device_node *route)
 {
+	struct rockchip_drm_private *private = drm_dev->dev_private;
 	struct rockchip_drm_mode_set *set;
 	struct device_node *connect;
 	struct drm_framebuffer *fb;
@@ -456,6 +505,9 @@ of_parse_display_resource(struct drm_device *drm_dev, struct device_node *route)
 	set = kzalloc(sizeof(*set), GFP_KERNEL);
 	if (!set)
 		return NULL;
+
+	if (!of_property_read_u32(route, "video,clock", &val))
+		set->clock = val;
 
 	if (!of_property_read_u32(route, "video,hdisplay", &val))
 		set->hdisplay = val;
@@ -489,6 +541,31 @@ of_parse_display_resource(struct drm_device *drm_dev, struct device_node *route)
 
 	if (!of_property_read_u32(route, "overscan,bottom_margin", &val))
 		set->bottom_margin = val;
+
+	if (!of_property_read_u32(route, "bcsh,brightness", &val))
+		set->brightness = val;
+	else
+		set->brightness = 50;
+
+	if (!of_property_read_u32(route, "bcsh,contrast", &val))
+		set->contrast = val;
+	else
+		set->contrast = 50;
+
+	if (!of_property_read_u32(route, "bcsh,saturation", &val))
+		set->saturation = val;
+	else
+		set->saturation = 50;
+
+	if (!of_property_read_u32(route, "bcsh,hue", &val))
+		set->hue = val;
+	else
+		set->hue = 50;
+
+	if (!of_property_read_u32(route, "cubic_lut,offset", &val)) {
+		private->cubic_lut[crtc->index].enable = true;
+		private->cubic_lut[crtc->index].offset = val;
+	}
 
 	set->ratio = 1;
 	if (!of_property_read_string(route, "logo,mode", &string) &&
@@ -676,7 +753,8 @@ static int setup_initial_state(struct drm_device *drm_dev,
 	}
 
 	list_for_each_entry(mode, &connector->modes, head) {
-		if (mode->hdisplay == set->hdisplay &&
+		if (mode->clock == set->clock &&
+		    mode->hdisplay == set->hdisplay &&
 		    mode->vdisplay == set->vdisplay &&
 		    mode->crtc_hsync_end == set->crtc_hsync_end &&
 		    mode->crtc_vsync_end == set->crtc_vsync_end &&
@@ -698,6 +776,10 @@ static int setup_initial_state(struct drm_device *drm_dev,
 		goto error_conn;
 	}
 
+	conn_state->tv.brightness = set->brightness;
+	conn_state->tv.contrast = set->contrast;
+	conn_state->tv.saturation = set->saturation;
+	conn_state->tv.hue = set->hue;
 	set->mode = mode;
 	crtc_state = drm_atomic_get_crtc_state(state, crtc);
 	if (IS_ERR(crtc_state)) {
@@ -1366,6 +1448,12 @@ static int rockchip_drm_create_properties(struct drm_device *dev)
 		return -ENOMEM;
 	private->share_id_prop = prop;
 
+	prop = drm_property_create_range(dev, DRM_MODE_PROP_ATOMIC,
+					 "CONNECTOR_ID", 0, 0xf);
+	if (!prop)
+		return -ENOMEM;
+	private->connector_id_prop = prop;
+
 	return drm_mode_create_tv_properties(dev, 0, NULL);
 }
 
@@ -1702,6 +1790,57 @@ static void rockchip_drm_lastclose(struct drm_device *dev)
 		drm_fb_helper_restore_fbdev_mode_unlocked(priv->fbdev_helper);
 }
 
+static struct drm_pending_vblank_event *
+rockchip_drm_add_vcnt_event(struct drm_crtc *crtc, struct drm_file *file_priv)
+{
+	struct drm_pending_vblank_event *e;
+	struct drm_device *dev = crtc->dev;
+	unsigned long flags;
+
+	e = kzalloc(sizeof(*e), GFP_KERNEL);
+	if (!e)
+		return NULL;
+
+	e->pipe = drm_crtc_index(crtc);
+	e->event.base.type = DRM_EVENT_ROCKCHIP_CRTC_VCNT;
+	e->event.base.length = sizeof(e->event.vbl);
+	e->event.vbl.crtc_id = crtc->base.id;
+	/* store crtc pipe id */
+	e->event.vbl.user_data = e->pipe;
+
+	spin_lock_irqsave(&dev->event_lock, flags);
+	drm_event_reserve_init_locked(dev, file_priv, &e->base, &e->event.base);
+	spin_unlock_irqrestore(&dev->event_lock, flags);
+
+	return e;
+}
+
+static int rockchip_drm_get_vcnt_event_ioctl(struct drm_device *dev, void *data,
+					     struct drm_file *file_priv)
+{
+	struct rockchip_drm_private *priv = dev->dev_private;
+	union drm_wait_vblank *vblwait = data;
+	struct drm_pending_vblank_event *e;
+	struct drm_crtc *crtc;
+	unsigned int flags, pipe;
+
+	flags = vblwait->request.type & (_DRM_VBLANK_FLAGS_MASK | _DRM_ROCKCHIP_VCNT_EVENT);
+	pipe = (vblwait->request.type & _DRM_VBLANK_HIGH_CRTC_MASK);
+	if (pipe)
+		pipe = pipe >> _DRM_VBLANK_HIGH_CRTC_SHIFT;
+	else
+		pipe = flags & _DRM_VBLANK_SECONDARY ? 1 : 0;
+
+	crtc = drm_crtc_from_index(dev, pipe);
+
+	if (flags & _DRM_ROCKCHIP_VCNT_EVENT) {
+		e = rockchip_drm_add_vcnt_event(crtc, file_priv);
+		priv->vcnt[pipe].event = e;
+	}
+
+	return 0;
+}
+
 static const struct drm_ioctl_desc rockchip_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_GEM_CREATE, rockchip_gem_create_ioctl,
 			  DRM_UNLOCKED | DRM_AUTH | DRM_RENDER_ALLOW),
@@ -1710,6 +1849,8 @@ static const struct drm_ioctl_desc rockchip_ioctls[] = {
 			  DRM_UNLOCKED | DRM_AUTH | DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_GEM_GET_PHYS, rockchip_gem_get_phys_ioctl,
 			  DRM_UNLOCKED | DRM_AUTH | DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(ROCKCHIP_GET_VCNT_EVENT, rockchip_drm_get_vcnt_event_ioctl,
+			  DRM_UNLOCKED),
 };
 
 static const struct file_operations rockchip_drm_driver_fops = {
@@ -1739,6 +1880,26 @@ static int rockchip_drm_gem_dmabuf_end_cpu_access(struct dma_buf *dma_buf,
 	return rockchip_gem_prime_end_cpu_access(obj, dir);
 }
 
+static int rockchip_drm_gem_begin_cpu_access_partial(
+	struct dma_buf *dma_buf,
+	enum dma_data_direction dir,
+	unsigned int offset, unsigned int len)
+{
+	struct drm_gem_object *obj = dma_buf->priv;
+
+	return rockchip_gem_prime_begin_cpu_access_partial(obj, dir, offset, len);
+}
+
+static int rockchip_drm_gem_end_cpu_access_partial(
+	struct dma_buf *dma_buf,
+	enum dma_data_direction dir,
+	unsigned int offset, unsigned int len)
+{
+	struct drm_gem_object *obj = dma_buf->priv;
+
+	return rockchip_gem_prime_end_cpu_access_partial(obj, dir, offset, len);
+}
+
 static const struct dma_buf_ops rockchip_drm_gem_prime_dmabuf_ops = {
 	.attach = drm_gem_map_attach,
 	.detach = drm_gem_map_detach,
@@ -1752,6 +1913,8 @@ static const struct dma_buf_ops rockchip_drm_gem_prime_dmabuf_ops = {
 	.vunmap = drm_gem_dmabuf_vunmap,
 	.begin_cpu_access = rockchip_drm_gem_dmabuf_begin_cpu_access,
 	.end_cpu_access = rockchip_drm_gem_dmabuf_end_cpu_access,
+	.begin_cpu_access_partial = rockchip_drm_gem_begin_cpu_access_partial,
+	.end_cpu_access_partial = rockchip_drm_gem_end_cpu_access_partial,
 };
 
 #ifdef CONFIG_ARCH_ROCKCHIP
@@ -2095,8 +2258,10 @@ static int rockchip_drm_platform_probe(struct platform_device *pdev)
 	int ret;
 
 	ret = rockchip_drm_platform_of_probe(dev);
+#if !IS_ENABLED(CONFIG_DRM_ROCKCHIP_VVOP)
 	if (ret)
 		return ret;
+#endif
 
 	match = rockchip_drm_match_add(dev);
 	if (IS_ERR(match))
@@ -2107,6 +2272,7 @@ static int rockchip_drm_platform_probe(struct platform_device *pdev)
 		rockchip_drm_match_remove(dev);
 		return ret;
 	}
+	dev->coherent_dma_mask = DMA_BIT_MASK(64);
 
 	return 0;
 }
@@ -2124,8 +2290,10 @@ static void rockchip_drm_platform_shutdown(struct platform_device *pdev)
 {
 	struct drm_device *drm = platform_get_drvdata(pdev);
 
-	if (drm)
+	if (drm) {
+		drm_kms_helper_poll_fini(drm);
 		drm_atomic_helper_shutdown(drm);
+	}
 }
 
 static const struct of_device_id rockchip_drm_dt_ids[] = {
@@ -2156,6 +2324,9 @@ static int __init rockchip_drm_init(void)
 	int ret;
 
 	num_rockchip_sub_drivers = 0;
+#if IS_ENABLED(CONFIG_DRM_ROCKCHIP_VVOP)
+	ADD_ROCKCHIP_SUB_DRIVER(vvop_platform_driver, CONFIG_DRM_ROCKCHIP_VVOP);
+#else
 	ADD_ROCKCHIP_SUB_DRIVER(vop_platform_driver, CONFIG_DRM_ROCKCHIP);
 	ADD_ROCKCHIP_SUB_DRIVER(vop2_platform_driver, CONFIG_DRM_ROCKCHIP);
 	ADD_ROCKCHIP_SUB_DRIVER(rockchip_lvds_driver,
@@ -2171,7 +2342,7 @@ static int __init rockchip_drm_init(void)
 	ADD_ROCKCHIP_SUB_DRIVER(rockchip_tve_driver,
 				CONFIG_ROCKCHIP_DRM_TVE);
 	ADD_ROCKCHIP_SUB_DRIVER(rockchip_rgb_driver, CONFIG_ROCKCHIP_RGB);
-
+#endif
 	ret = platform_register_drivers(rockchip_sub_drivers,
 					num_rockchip_sub_drivers);
 	if (ret)

@@ -65,11 +65,11 @@
 	pcie30_3v3: gpio-regulator {
 		compatible = "regulator-gpio";
 		regulator-name = "pcie30_3v3";
-		regulator-min-microvolt = <0100000>;
+		regulator-min-microvolt = <100000>;
 		regulator-max-microvolt = <3300000>;
 		gpios = <&gpio0 RK_PD4 GPIO_ACTIVE_HIGH>;
 		gpios-states = <0x1>;
-		states = <0100000 0x0
+		states = <100000 0x0
 			  3300000 0x1>;
 	};
 
@@ -152,7 +152,7 @@
 };
 
 /*
- * mipi_dphy0 needs to be enabled
+ * video_phy0 needs to be enabled
  * when dsi0 is enabled
  */
 &dsi0 {
@@ -172,7 +172,7 @@
 };
 
 /*
- * mipi_dphy1 needs to be enabled
+ * video_phy1 needs to be enabled
  * when dsi1 is enabled
  */
 &dsi1 {
@@ -218,7 +218,7 @@
 	snps,reset-delays-us = <0 20000 100000>;
 
 	assigned-clocks = <&cru SCLK_GMAC0_RX_TX>, <&cru SCLK_GMAC0>;
-	assigned-clock-parents = <&cru SCLK_GMAC0_RGMII_SPEED>;
+	assigned-clock-parents = <&cru SCLK_GMAC0_RGMII_SPEED>, <&cru CLK_MAC0_2TOP>;
 	assigned-clock-rates = <0>, <125000000>;
 
 	pinctrl-names = "default";
@@ -245,7 +245,7 @@
 	snps,reset-delays-us = <0 20000 100000>;
 
 	assigned-clocks = <&cru SCLK_GMAC1_RX_TX>, <&cru SCLK_GMAC1>;
-	assigned-clock-parents = <&cru SCLK_GMAC1_RGMII_SPEED>;
+	assigned-clock-parents = <&cru SCLK_GMAC1_RGMII_SPEED>, <&cru CLK_MAC1_2TOP>;
 	assigned-clock-rates = <0>, <125000000>;
 
 	pinctrl-names = "default";
@@ -283,6 +283,7 @@
 		reset-gpios = <&gpio3 RK_PB6 GPIO_ACTIVE_LOW>;
 		pwdn-gpios = <&gpio4 RK_PB4 GPIO_ACTIVE_LOW>;
 		rockchip,grf = <&grf>;
+		power-domains = <&power RK3568_PD_VI>;
 		rockchip,camera-module-index = <0>;
 		rockchip,camera-module-facing = "back";
 		rockchip,camera-module-name = "RK-CMK-8M-2-v1";
@@ -353,11 +354,11 @@
 	};
 };
 
-&mipi_dphy0 {
+&video_phy0 {
 	status = "okay";
 };
 
-&mipi_dphy1 {
+&video_phy1 {
 	status = "disabled";
 };
 

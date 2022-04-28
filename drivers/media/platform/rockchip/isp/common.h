@@ -100,6 +100,8 @@ enum rkisp_fmt_pix_type {
 	FMT_BAYER,
 	FMT_JPEG,
 	FMT_FBCGAIN,
+	FMT_EBD,
+	FMT_SPD,
 	FMT_MAX
 };
 
@@ -135,6 +137,7 @@ struct rkisp_dummy_buffer {
 };
 
 extern int rkisp_debug;
+extern bool rkisp_monitor;
 extern u64 rkisp_debug_reg;
 extern struct platform_driver rkisp_plat_drv;
 
@@ -163,6 +166,7 @@ static inline struct vb2_queue *to_vb2_queue(struct file *file)
 
 void rkisp_write(struct rkisp_device *dev, u32 reg, u32 val, bool is_direct);
 u32 rkisp_read(struct rkisp_device *dev, u32 reg, bool is_direct);
+u32 rkisp_read_reg_cache(struct rkisp_device *dev, u32 reg);
 void rkisp_set_bits(struct rkisp_device *dev, u32 reg, u32 mask, u32 val, bool is_direct);
 void rkisp_clear_bits(struct rkisp_device *dev, u32 reg, u32 mask, bool is_direct);
 void rkisp_update_regs(struct rkisp_device *dev, u32 start, u32 end);

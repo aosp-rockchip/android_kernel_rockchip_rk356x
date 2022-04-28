@@ -38,6 +38,7 @@
 #define RGA_BUF_GEM_TYPE_DMA       0x80
 #define RGA2_MAJOR_VERSION_MASK     (0xFF000000)
 #define RGA2_MINOR_VERSION_MASK     (0x00F00000)
+#define RGA2_SVN_VERSION_MASK       (0x000FFFFF)
 
 /* RGA2 process mode enum */
 enum
@@ -284,6 +285,21 @@ typedef struct line_draw_t
 }
 line_draw_t;
 
+/* color space convert coefficient. */
+typedef struct csc_coe_t {
+    int16_t r_v;
+    int16_t g_y;
+    int16_t b_u;
+    int32_t off;
+} csc_coe_t;
+
+typedef struct full_csc_t {
+    unsigned char flag;
+    csc_coe_t coe_y;
+    csc_coe_t coe_u;
+    csc_coe_t coe_v;
+} full_csc_t;
+
 typedef struct rga_img_info_t
 {
     unsigned long yrgb_addr;      /* yrgb    mem addr         */
@@ -394,6 +410,8 @@ struct rga_req {
     uint8_t  src_trans_mode;
 
     uint8_t dither_mode;
+
+    full_csc_t full_csc;            /* full color space convert */
 };
 struct rga_req_32
 {
@@ -444,6 +462,10 @@ struct rga_req_32
                                     /* ([5]   dst   alpha mode)      */
                                     /* ([6]   alpha output mode sel) 0 src / 1 dst*/
     uint8_t  src_trans_mode;
+
+    uint8_t dither_mode;
+
+    full_csc_t full_csc;            /* full color space convert */
 };
 
 
@@ -528,13 +550,18 @@ struct rga2_req
     u8 src_a_global_val;    /* src global alpha value        */
     u8 dst_a_global_val;    /* dst global alpha value        */
 
-
     u8  rop_mode;	    /* rop mode select 0 : rop2 1 : rop3 2 : rop4 */
     u16 rop_code;           /* rop2/3/4 code */
 
     u8 palette_mode;        /* (enum) color palatte  0/1bpp, 1/2bpp 2/4bpp 3/8bpp*/
 
     u8 yuv2rgb_mode;        /* (enum) BT.601 MPEG / BT.601 JPEG / BT.709  */
+                            /* [1:0]   src0 csc mode        */
+                            /* [3:2]   dst csc mode         */
+                            /* [4]     dst csc clip enable  */
+                            /* [6:5]   src1 csc mdoe        */
+                            /* [7]     src1 csc clip enable */
+    full_csc_t full_csc;    /* full color space convert */
 
     u8 endian_mode;         /* 0/little endian 1/big endian */
 
@@ -570,6 +597,9 @@ struct rga2_mmu_buf_t {
     unsigned int *buf_virtual;
 
     struct page **pages;
+
+    u8 buf_order;
+    u8 pages_order;
 };
 
 enum
@@ -683,11 +713,17 @@ struct rga2_reg {
 	struct list_head	session_link;
 	struct list_head	status_link;
 	uint32_t  sys_reg[8];
+	uint32_t  csc_reg[12];
 	uint32_t  cmd_reg[32];
 
-	uint32_t *MMU_base;
+	uint32_t *MMU_src0_base;
+	uint32_t *MMU_src1_base;
+	uint32_t *MMU_dst_base;
+	uint32_t MMU_src0_count;
+	uint32_t MMU_src1_count;
+	uint32_t MMU_dst_count;
+
 	uint32_t MMU_len;
-	uint32_t MMU_count;
 	bool MMU_map;
 
 	struct sg_table *sg_src0;
@@ -738,6 +774,9 @@ struct rga2_service_info {
 #define RGA2_INT                  0x010
 #define RGA2_MMU_CTRL0            0x018
 #define RGA2_MMU_CMD_BASE         0x01c
+
+//Full Csc Coefficient
+#define RGA2_CSC_COE_BASE         0x60
 
 //Command code start
 #define RGA2_MODE_CTRL            0x100

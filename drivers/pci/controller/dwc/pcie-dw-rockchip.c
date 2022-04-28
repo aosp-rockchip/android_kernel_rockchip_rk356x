@@ -84,6 +84,7 @@ struct reset_bulk_data	{
 #define PCIE_CAP_LINK_CONTROL2_LINK_STATUS	0xa0
 
 #define PCIE_CLIENT_INTR_STATUS_LEGACY	0x08
+#define PCIE_CLIENT_INTR_STATUS_MISC	0x10
 #define PCIE_CLIENT_INTR_MASK_LEGACY	0x1c
 #define UNMASK_ALL_LEGACY_INT		0xffff0000
 #define PCIE_CLIENT_INTR_MASK		0x24
@@ -440,17 +441,27 @@ static int rk_pcie_establish_link(struct dw_pcie *pci)
 		return 0;
 	}
 
-	/* Rest the device */
-	gpiod_set_value_cansleep(rk_pcie->rst_gpio, 0);
-	msleep(1000);
-	gpiod_set_value_cansleep(rk_pcie->rst_gpio, 1);
-
 	rk_pcie_disable_ltssm(rk_pcie);
 	rk_pcie_link_status_clear(rk_pcie);
 	rk_pcie_enable_debug(rk_pcie);
 
+	/* Enable client reset or link down interrupt */
+	rk_pcie_writel_apb(rk_pcie, PCIE_CLIENT_INTR_MASK, 0x40000);
+
 	/* Enable LTSSM */
 	rk_pcie_enable_ltssm(rk_pcie);
+
+	/*
+	 * PCIe requires the refclk to be stable for 100µs prior to releasing
+	 * PERST.  See table 2-4 in section 2.6.2 AC Specifications of the PCI
+	 * Express Card Electromechanical Specification, 1.1. However, we don't
+	 * know if the refclk is coming from RC's PHY or external OSC. If it's
+	 * from RC, so enabling LTSSM is the just right place to release #PERST.
+	 * We need a little more extra time as before, rather than setting just
+	 * 100us as we don't know how long should the device need to reset.
+	 */
+	msleep(1000);
+	gpiod_set_value_cansleep(rk_pcie->rst_gpio, 1);
 
 	for (retries = 0; retries < 10; retries++) {
 		if (dw_pcie_link_up(pci)) {
@@ -987,6 +998,7 @@ static irqreturn_t rk_pcie_sys_irq_handler(int irq, void *arg)
 	u32 chn = 0;
 	union int_status status;
 	union int_clear clears;
+	u32 reg, val;
 
 	status.asdword = dw_pcie_readl_dbi(rk_pcie->pci, PCIE_DMA_OFFSET +
 					   PCIE_DMA_WR_INT_STATUS);
@@ -1007,6 +1019,18 @@ static irqreturn_t rk_pcie_sys_irq_handler(int irq, void *arg)
 		dw_pcie_writel_dbi(rk_pcie->pci, PCIE_DMA_OFFSET +
 				   PCIE_DMA_WR_INT_CLEAR, clears.asdword);
 	}
+
+	reg = rk_pcie_readl_apb(rk_pcie, PCIE_CLIENT_INTR_STATUS_MISC);
+	if (reg & BIT(2)) {
+		/* Setup command register */
+		val = dw_pcie_readl_dbi(rk_pcie->pci, PCI_COMMAND);
+		val &= 0xffff0000;
+		val |= PCI_COMMAND_IO | PCI_COMMAND_MEMORY |
+		       PCI_COMMAND_MASTER | PCI_COMMAND_SERR;
+		dw_pcie_writel_dbi(rk_pcie->pci, PCI_COMMAND, val);
+	}
+
+	rk_pcie_writel_apb(rk_pcie, PCIE_CLIENT_INTR_STATUS_MISC, reg);
 
 	return IRQ_HANDLED;
 }
@@ -1172,6 +1196,36 @@ static int rk_pcie_init_irq_domain(struct rk_pcie *rockchip)
 	return 0;
 }
 
+static int rk_pcie_enable_power(struct rk_pcie *rk_pcie)
+{
+	int ret = 0;
+	struct device *dev = rk_pcie->pci->dev;
+
+	if (IS_ERR(rk_pcie->vpcie3v3))
+		return ret;
+
+	ret = regulator_enable(rk_pcie->vpcie3v3);
+	if (ret)
+		dev_err(dev, "fail to enable vpcie3v3 regulator\n");
+
+	return ret;
+}
+
+static int rk_pcie_disable_power(struct rk_pcie *rk_pcie)
+{
+	int ret = 0;
+	struct device *dev = rk_pcie->pci->dev;
+
+	if (IS_ERR(rk_pcie->vpcie3v3))
+		return ret;
+
+	ret = regulator_disable(rk_pcie->vpcie3v3);
+	if (ret)
+		dev_err(dev, "fail to disable vpcie3v3 regulator\n");
+
+	return ret;
+}
+
 static int rk_pcie_really_probe(void *p)
 {
 	struct platform_device *pdev = p;
@@ -1231,13 +1285,19 @@ static int rk_pcie_really_probe(void *p)
 		dev_info(dev, "no vpcie3v3 regulator found\n");
 	}
 
-	if (!IS_ERR(rk_pcie->vpcie3v3)) {
-		ret = regulator_enable(rk_pcie->vpcie3v3);
-		if (ret) {
-			dev_err(pci->dev, "fail to enable vpcie3v3 regulator\n");
-			return ret;
-		}
-	}
+	/*
+	 * Rest the device before enabling power because some of the
+	 * platforms may use external refclk input with the some power
+	 * rail connect to 100MHz OSC chip. So once the power is up for
+	 * the slot and the refclk is available, which isn't quite follow
+	 * the spec. We should make sure it is in reset state before
+	 * everthing's ready.
+	 */
+	gpiod_set_value_cansleep(rk_pcie->rst_gpio, 0);
+
+	ret = rk_pcie_enable_power(rk_pcie);
+	if (ret)
+		return ret;
 
 	ret = rk_pcie_phy_init(rk_pcie);
 	if (ret) {
@@ -1349,8 +1409,8 @@ remove_irq_domain:
 deinit_clk:
 	rk_pcie_clk_deinit(rk_pcie);
 disable_vpcie3v3:
-	if (!IS_ERR(rk_pcie->vpcie3v3))
-		regulator_disable(rk_pcie->vpcie3v3);
+	rk_pcie_disable_power(rk_pcie);
+
 	return ret;
 }
 
@@ -1384,15 +1444,9 @@ static int __maybe_unused rockchip_dw_pcie_suspend(struct device *dev)
 
 	rk_pcie->in_suspend = true;
 
-	if (!IS_ERR(rk_pcie->vpcie3v3)) {
-		ret = regulator_disable(rk_pcie->vpcie3v3);
-		if (ret) {
-			dev_err(dev, "fail to disable vpcie3v3 regulator\n");
-			return ret;
-		}
-	}
+	ret = rk_pcie_disable_power(rk_pcie);
 
-	return 0;
+	return ret;
 }
 
 static int __maybe_unused rockchip_dw_pcie_resume(struct device *dev)
@@ -1401,13 +1455,9 @@ static int __maybe_unused rockchip_dw_pcie_resume(struct device *dev)
 	bool std_rc = rk_pcie->mode == RK_PCIE_RC_TYPE && !rk_pcie->dma_obj;
 	int ret;
 
-	if (!IS_ERR(rk_pcie->vpcie3v3)) {
-		ret = regulator_enable(rk_pcie->vpcie3v3);
-		if (ret) {
-			dev_err(dev, "fail to enable vpcie3v3 regulator\n");
-			return ret;
-		}
-	}
+	ret = rk_pcie_enable_power(rk_pcie);
+	if (ret)
+		return ret;
 
 	ret = clk_bulk_enable(rk_pcie->clk_cnt, rk_pcie->clks);
 	if (ret) {
@@ -1478,8 +1528,8 @@ std_rc_done:
 
 	return 0;
 err:
-	if (!IS_ERR(rk_pcie->vpcie3v3))
-		regulator_disable(rk_pcie->vpcie3v3);
+	rk_pcie_disable_power(rk_pcie);
+
 	return ret;
 }
 

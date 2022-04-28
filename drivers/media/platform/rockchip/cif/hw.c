@@ -326,6 +326,18 @@ static const struct cif_reg rv1126_cif_regs[] = {
 	[CIF_REG_DVP_CUR_DST] = CIF_REG(RV1126_CIF_CUR_DST),
 	[CIF_REG_DVP_LAST_LINE] = CIF_REG(RV1126_CIF_LAST_LINE),
 	[CIF_REG_DVP_LAST_PIX] = CIF_REG(RV1126_CIF_LAST_PIX),
+	[CIF_REG_DVP_FRM0_ADDR_Y_ID1] = CIF_REG(CIF_FRM0_ADDR_Y_ID1),
+	[CIF_REG_DVP_FRM0_ADDR_UV_ID1] = CIF_REG(CIF_FRM0_ADDR_UV_ID1),
+	[CIF_REG_DVP_FRM1_ADDR_Y_ID1] = CIF_REG(CIF_FRM1_ADDR_Y_ID1),
+	[CIF_REG_DVP_FRM1_ADDR_UV_ID1] = CIF_REG(CIF_FRM1_ADDR_UV_ID1),
+	[CIF_REG_DVP_FRM0_ADDR_Y_ID2] = CIF_REG(CIF_FRM0_ADDR_Y_ID2),
+	[CIF_REG_DVP_FRM0_ADDR_UV_ID2] = CIF_REG(CIF_FRM0_ADDR_UV_ID2),
+	[CIF_REG_DVP_FRM1_ADDR_Y_ID2] = CIF_REG(CIF_FRM1_ADDR_Y_ID2),
+	[CIF_REG_DVP_FRM1_ADDR_UV_ID2] = CIF_REG(CIF_FRM1_ADDR_UV_ID2),
+	[CIF_REG_DVP_FRM0_ADDR_Y_ID3] = CIF_REG(CIF_FRM0_ADDR_Y_ID3),
+	[CIF_REG_DVP_FRM0_ADDR_UV_ID3] = CIF_REG(CIF_FRM0_ADDR_UV_ID3),
+	[CIF_REG_DVP_FRM1_ADDR_Y_ID3] = CIF_REG(CIF_FRM1_ADDR_Y_ID3),
+	[CIF_REG_DVP_FRM1_ADDR_UV_ID3] = CIF_REG(CIF_FRM1_ADDR_UV_ID3),
 	[CIF_REG_MIPI_LVDS_ID0_CTRL0] = CIF_REG(CIF_CSI_ID0_CTRL0),
 	[CIF_REG_MIPI_LVDS_ID0_CTRL1] = CIF_REG(CIF_CSI_ID0_CTRL1),
 	[CIF_REG_MIPI_LVDS_ID1_CTRL0] = CIF_REG(CIF_CSI_ID1_CTRL0),
@@ -582,6 +594,7 @@ static const struct cif_reg rk3568_cif_regs[] = {
 	[CIF_REG_MMU_INT_STATUS] = CIF_REG(CIF_MMU_INT_STATUS),
 	[CIF_REG_MMU_AUTO_GATING] = CIF_REG(CIF_MMU_AUTO_GATING),
 	[CIF_REG_GRF_CIFIO_CON] = CIF_REG(CIF_GRF_VI_CON0),
+	[CIF_REG_GRF_CIFIO_CON1] = CIF_REG(CIF_GRF_VI_CON1),
 };
 
 static const struct rkcif_hw_match_data px30_cif_match_data = {
@@ -751,17 +764,17 @@ err:
 
 static void rkcif_iommu_cleanup(struct rkcif_hw *cif_hw)
 {
-	struct iommu_domain *domain;
+	if (cif_hw->domain)
+		cif_hw->domain->ops->detach_dev(cif_hw->domain, cif_hw->dev);
+}
 
-	dev_err(cif_hw->dev, "%s enter\n", __func__);
+static void rkcif_iommu_enable(struct rkcif_hw *cif_hw)
+{
+	if (!cif_hw->domain)
+		cif_hw->domain = iommu_get_domain_for_dev(cif_hw->dev);
 
-	domain = iommu_get_domain_for_dev(cif_hw->dev);
-	if (domain) {
-#ifdef CONFIG_IOMMU_API
-		domain->ops->detach_dev(domain, cif_hw->dev);
-		domain->ops->attach_dev(domain, cif_hw->dev);
-#endif
-	}
+	if (cif_hw->domain)
+		cif_hw->domain->ops->attach_dev(cif_hw->domain, cif_hw->dev);
 }
 
 static inline bool is_iommu_enable(struct device *dev)
@@ -796,6 +809,9 @@ void rkcif_hw_soft_reset(struct rkcif_hw *cif_hw, bool is_rst_iommu)
 	for (i = 0; i < ARRAY_SIZE(cif_hw->cif_rst); i++)
 		if (cif_hw->cif_rst[i])
 			reset_control_deassert(cif_hw->cif_rst[i]);
+
+	if (cif_hw->iommu_en && is_rst_iommu)
+		rkcif_iommu_enable(cif_hw);
 }
 
 static int rkcif_plat_hw_probe(struct platform_device *pdev)

@@ -184,7 +184,7 @@ int vop_plane_dump(struct vop_dump_info *dump_info, int frame_count)
 			 width, dump_info->height, get_format_str(format),
 			 "bin");
 	} else {
-		width = dump_info->pitches >> 2;
+		width = dump_info->pitches * 8 / bpp;
 		flags = O_RDWR | O_CREAT;
 		snprintf(file_name, 100, "%s/win%d_area%d_%dx%d_%s%s%d.%s",
 			 DUMP_BUF_PATH, dump_info->win_id,
@@ -213,7 +213,7 @@ int vop_plane_dump(struct vop_dump_info *dump_info, int frame_count)
 		DRM_INFO("dump file name is:%s\n", file_name);
 		ksys_close(fd);
 	} else {
-		DRM_INFO("writ fail fd err fd is %d\n", fd);
+		DRM_INFO("write %s failed errno: %d\n", ptr, fd);
 	}
 	set_fs(old_fs);
 	vunmap(kvaddr);

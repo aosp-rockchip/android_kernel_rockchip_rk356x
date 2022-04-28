@@ -222,12 +222,14 @@ static void rockchip_fractional_approximation(struct clk_hw *hw,
 				*m = 1;
 				*n = *parent_rate / rate;
 				return;
+			} else if (!(fd->flags & CLK_FRAC_DIVIDER_NO_LIMIT)) {
+				pr_warn("%s p_rate(%ld) is low than rate(%ld)*20, use integer or half-div\n",
+					clk_hw_get_name(hw),
+					*parent_rate, rate);
+				*m = 0;
+				*n = 1;
+				return;
 			}
-			pr_warn("%s p_rate(%ld) is low than rate(%ld)*20, use integer or half-div\n",
-				clk_hw_get_name(hw), *parent_rate, rate);
-			*m = 0;
-			*n = 1;
-			return;
 		}
 	}
 
@@ -616,7 +618,8 @@ void __init rockchip_clk_register_branches(
 				flags, &ctx->lock);
 			break;
 		case branch_gate:
-			flags |= CLK_SET_RATE_PARENT;
+			if (!(list->gate_flags & CLK_GATE_NO_SET_RATE))
+				flags |= CLK_SET_RATE_PARENT;
 
 			clk = clk_register_gate(NULL, list->name,
 				list->parent_names[0], flags,

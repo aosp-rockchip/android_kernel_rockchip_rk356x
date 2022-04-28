@@ -59,6 +59,10 @@ int rkisp_debug;
 module_param_named(debug, rkisp_debug, int, 0644);
 MODULE_PARM_DESC(debug, "Debug level (0-1)");
 
+bool rkisp_monitor;
+module_param_named(monitor, rkisp_monitor, bool, 0644);
+MODULE_PARM_DESC(monitor, "rkisp abnormal restart monitor");
+
 static bool rkisp_clk_dbg;
 module_param_named(clk_dbg, rkisp_clk_dbg, bool, 0644);
 MODULE_PARM_DESC(clk_dbg, "rkisp clk set by user");
@@ -664,22 +668,26 @@ static int rkisp_get_reserved_mem(struct rkisp_device *isp_dev)
 	/* Get reserved memory region from Device-tree */
 	np = of_parse_phandle(dev->of_node, "memory-region-thunderboot", 0);
 	if (!np) {
-		dev_err(dev, "No %s specified\n", "memory-region-thunderboot");
-		return -1;
+		dev_info(dev, "No memory-region-thunderboot specified\n");
+		return 0;
 	}
 
 	ret = of_address_to_resource(np, 0, &r);
 	if (ret) {
 		dev_err(dev, "No memory address assigned to the region\n");
-		return -1;
+		return ret;
 	}
 
 	isp_dev->resmem_pa = r.start;
 	isp_dev->resmem_size = resource_size(&r);
+	isp_dev->resmem_addr = dma_map_single(dev, phys_to_virt(r.start),
+					      sizeof(struct rkisp_thunderboot_resmem_head),
+					      DMA_BIDIRECTIONAL);
+	ret = dma_mapping_error(dev, isp_dev->resmem_addr);
+
 	dev_info(dev, "Allocated reserved memory, paddr: 0x%x\n",
 		(u32)isp_dev->resmem_pa);
-
-	return 0;
+	return ret;
 }
 
 static int rkisp_plat_probe(struct platform_device *pdev)
@@ -714,10 +722,13 @@ static int rkisp_plat_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	sprintf(isp_dev->name, "%s%d",
+	sprintf(isp_dev->media_dev.model, "%s%d",
 		DRIVER_NAME, isp_dev->dev_id);
 
-	rkisp_get_reserved_mem(isp_dev);
+	ret = rkisp_get_reserved_mem(isp_dev);
+	if (ret)
+		return ret;
+
 	mutex_init(&isp_dev->apilock);
 	mutex_init(&isp_dev->iqlock);
 	atomic_set(&isp_dev->pipe.power_cnt, 0);
@@ -735,8 +746,9 @@ static int rkisp_plat_probe(struct platform_device *pdev)
 		}
 	}
 
-	strlcpy(isp_dev->media_dev.model, isp_dev->name,
-		sizeof(isp_dev->media_dev.model));
+	strscpy(isp_dev->name, dev_name(dev), sizeof(isp_dev->name));
+	strscpy(isp_dev->media_dev.driver_name, isp_dev->name,
+		sizeof(isp_dev->media_dev.driver_name));
 	isp_dev->media_dev.dev = dev;
 	isp_dev->media_dev.ops = &rkisp_media_ops;
 

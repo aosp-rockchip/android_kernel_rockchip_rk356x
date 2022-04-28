@@ -170,7 +170,7 @@ static int mpp_show_session_summary(struct seq_file *seq, void *offset)
 	mutex_lock(&srv->session_lock);
 	list_for_each_entry_safe(session, n,
 				 &srv->session_list,
-				 session_link) {
+				 service_link) {
 		struct  mpp_dev *mpp;
 
 		if (!session->priv)
@@ -310,11 +310,10 @@ static int mpp_service_probe(struct platform_device *pdev)
 		struct mpp_taskqueue *queue;
 
 		for (i = 0; i < srv->taskqueue_cnt; i++) {
-			queue = devm_kzalloc(dev, sizeof(*queue), GFP_KERNEL);
+			queue = mpp_taskqueue_init(dev);
 			if (!queue)
 				continue;
 
-			mpp_taskqueue_init(queue, srv);
 			srv->task_queues[i] = queue;
 		}
 	}

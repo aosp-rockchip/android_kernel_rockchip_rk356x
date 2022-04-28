@@ -399,6 +399,7 @@ static long dma_buf_ioctl(struct file *file,
 {
 	struct dma_buf *dmabuf;
 	struct dma_buf_sync sync;
+	struct dma_buf_sync_partial sync_p;
 	enum dma_data_direction dir;
 	int ret;
 
@@ -444,6 +445,44 @@ static long dma_buf_ioctl(struct file *file,
 	case DMA_BUF_SET_NAME_A:
 	case DMA_BUF_SET_NAME_B:
 		return dma_buf_set_name(dmabuf, (const char __user *)arg);
+
+	case DMA_BUF_IOCTL_SYNC_PARTIAL:
+		if (copy_from_user(&sync_p, (void __user *) arg, sizeof(sync_p)))
+			return -EFAULT;
+
+		if (sync_p.len == 0)
+			return -EINVAL;
+
+		if (sync_p.len > dmabuf->size || sync_p.offset > dmabuf->size - sync_p.len)
+			return -EINVAL;
+
+		if (sync_p.flags & ~DMA_BUF_SYNC_VALID_FLAGS_MASK)
+			return -EINVAL;
+
+		switch (sync_p.flags & DMA_BUF_SYNC_RW) {
+		case DMA_BUF_SYNC_READ:
+			dir = DMA_FROM_DEVICE;
+			break;
+		case DMA_BUF_SYNC_WRITE:
+			dir = DMA_TO_DEVICE;
+			break;
+		case DMA_BUF_SYNC_RW:
+			dir = DMA_BIDIRECTIONAL;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		if (sync_p.flags & DMA_BUF_SYNC_END)
+			ret = dma_buf_end_cpu_access_partial(dmabuf, dir,
+							     sync_p.offset,
+							     sync_p.len);
+		else
+			ret = dma_buf_begin_cpu_access_partial(dmabuf, dir,
+							       sync_p.offset,
+							       sync_p.len);
+
+		return ret;
 
 	default:
 		return -ENOTTY;
@@ -1479,19 +1518,25 @@ static void write_proc(struct seq_file *s, struct dma_proc *proc)
 
 	seq_printf(s, "\n%s (PID %d) size: %zu\nDMA Buffers:\n",
 		proc->name, proc->pid, proc->size);
-	seq_printf(s, "%-8s\t%-60s\t%-8s\t%-8s\n",
-		"Name", "Exp_name", "Size (KB)", "Time Alive (sec)");
+	seq_printf(s, "%-8s\t%-60s\t%-8s\t%-8s\t%s\n",
+		"Name", "Exp_name", "Size (KB)", "Alive (sec)", "Attached Devices");
 
 	hash_for_each(proc->dma_bufs, i, tmp, head) {
 		struct dma_buf *dmabuf = tmp->dmabuf;
+		struct dma_buf_attachment *a;
 		ktime_t elapmstime = ktime_ms_delta(ktime_get(), dmabuf->ktime);
 
 		elapmstime = ktime_divns(elapmstime, MSEC_PER_SEC);
-		seq_printf(s, "%-8s\t%-60s\t%-8zu\t%-8lld\n",
+		seq_printf(s, "%-8s\t%-60s\t%-8zu\t%-8lld",
 				dmabuf->name,
 				dmabuf->exp_name,
 				dmabuf->size / SZ_1K,
 				elapmstime);
+
+		list_for_each_entry(a, &dmabuf->attachments, node) {
+			seq_printf(s, "\t%s", dev_name(a->dev));
+		}
+		seq_printf(s, "\n");
 	}
 }
 

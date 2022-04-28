@@ -392,6 +392,7 @@
 #define CIF_MIPI_DATA_SEL_VC(a)			(((a) & 0x3) << 6)
 #define CIF_MIPI_DATA_SEL_DT(a)			(((a) & 0x3F) << 0)
 /* MIPI DATA_TYPE */
+#define CIF_CSI2_DT_EBD				0x12
 #define CIF_CSI2_DT_YUV420_8b			0x18
 #define CIF_CSI2_DT_YUV420_10b			0x19
 #define CIF_CSI2_DT_YUV422_8b			0x1E
@@ -402,6 +403,7 @@
 #define CIF_CSI2_DT_RAW8			0x2A
 #define CIF_CSI2_DT_RAW10			0x2B
 #define CIF_CSI2_DT_RAW12			0x2C
+#define CIF_CSI2_DT_SPD				0x2F
 
 /* MIPI_IMSC, MIPI_RIS, MIPI_MIS, MIPI_ICR, MIPI_ISR */
 #define CIF_MIPI_SYNC_FIFO_OVFLW(a)		(((a) & 0xF) << 0)
@@ -1905,8 +1907,11 @@ static inline void sp_mi_ctrl_autoupdate_en(void __iomem *base)
 static inline void force_cfg_update(struct rkisp_device *dev)
 {
 	void __iomem *base = dev->base_addr;
+	u32 val = readl(base + CIF_MI_CTRL);
 
 	dev->hw_dev->is_mi_update = true;
+	val |= CIF_MI_CTRL_INIT_OFFSET_EN | CIF_MI_CTRL_INIT_BASE_EN;
+	writel(val, base + CIF_MI_CTRL);
 	writel(CIF_MI_INIT_SOFT_UPD, base + CIF_MI_INIT);
 }
 

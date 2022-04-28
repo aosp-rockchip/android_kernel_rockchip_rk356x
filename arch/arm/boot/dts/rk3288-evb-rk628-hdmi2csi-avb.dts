@@ -9,7 +9,7 @@
 	compatible = "rockchip,rk3288-evb-rk628", "rockchip,rk3288";
 
 	chosen {
-		bootargs = "rootwait earlycon=uart8250,mmio32,0xff690000 vmalloc=496M swiotlb=1 console=ttyFIQ0 androidboot.baseband=N/A androidboot.veritymode=enforcing androidboot.hardware=rk30board androidboot.console=ttyFIQ0 init=/init kpti=0 androidboot.selinux=permissive";
+		bootargs = "rootwait earlycon=uart8250,mmio32,0xff690000 vmalloc=496M console=ttyFIQ0 androidboot.baseband=N/A androidboot.veritymode=enforcing androidboot.hardware=rk30board androidboot.console=ttyFIQ0 init=/init kpti=0 androidboot.selinux=permissive";
 	};
 
 	hdmiin-sound {
@@ -60,6 +60,11 @@
 
 &rk628_csi {
 	status = "okay";
+	/*
+	 * If the hpd output level is inverted on the circuit,
+	 * the following configuration needs to be enabled.
+	 */
+	/* hpd-output-inverted; */
 	plugin-det-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
 	power-gpios = <&gpio0 17 GPIO_ACTIVE_HIGH>;
 	rockchip,camera-module-index = <0>;
@@ -118,4 +123,8 @@
 			remote-endpoint = <&dphy_rx_out>;
 		};
 	};
+};
+
+&isp_mmu {
+	status = "okay";
 };

@@ -14,15 +14,14 @@
 	model = "Rockchip RK3566 EVB1 DDR4 V10 Board";
 	compatible = "rockchip,rk3566-evb1-ddr4-v10", "rockchip,rk3566";
 
-	pcie20_3v3: gpio-regulator {
-		compatible = "regulator-gpio";
-		regulator-name = "pcie20_3v3";
-		regulator-min-microvolt = <0100000>;
+	vcc3v3_pcie: gpio-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3_pcie";
+		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
-		gpios = <&gpio0 RK_PB7 GPIO_ACTIVE_HIGH>;
-		gpios-states = <0x1>;
-		states = <0100000 0x0
-			  3300000 0x1>;
+		enable-active-high;
+		gpio = <&gpio0 RK_PB7 GPIO_ACTIVE_HIGH>;
+		vin-supply = <&dc_12v>;
 	};
 
 	rk_headset: rk-headset {
@@ -156,7 +155,7 @@
 };
 
 /*
- * mipi_dphy0 needs to be enabled
+ * video_phy0 needs to be enabled
  * when dsi0 is enabled
  */
 &dsi0 {
@@ -179,7 +178,7 @@
 };
 
 /*
- * mipi_dphy1 needs to be enabled
+ * video_phy1 needs to be enabled
  * when dsi1 is enabled
  */
 &dsi1 {
@@ -224,16 +223,6 @@
  */
 &gt1x {
 	power-supply = <&vcc3v3_lcd0_n>;
-};
-
-&hdmi {
-	rockchip,phy-table =
-		<92812500  0x8009 0x0000 0x0270>,
-		<165000000 0x800b 0x0000 0x026d>,
-		<185625000 0x800b 0x0000 0x01ed>,
-		<297000000 0x800b 0x0000 0x01ad>,
-		<594000000 0x8029 0x0000 0x0088>,
-		<000000000 0x0000 0x0000 0x0000>;
 };
 
 &i2c2 {
@@ -327,17 +316,17 @@
 	};
 };
 
-&mipi_dphy0 {
+&video_phy0 {
 	status = "okay";
 };
 
-&mipi_dphy1 {
+&video_phy1 {
 	status = "disabled";
 };
 
 &pcie2x1 {
 	reset-gpios = <&gpio1 RK_PB2 GPIO_ACTIVE_HIGH>;
-	vpcie3v3-supply = <&pcie20_3v3>;
+	vpcie3v3-supply = <&vcc3v3_pcie>;
 	status = "okay";
 };
 
@@ -451,6 +440,10 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&wifi_host_wake_irq>;
 	WIFI,host_wake_irq = <&gpio3 RK_PD4 GPIO_ACTIVE_HIGH>;
+};
+
+&work_led {
+	gpios = <&gpio2 RK_PB2 GPIO_ACTIVE_HIGH>;
 };
 
 &pinctrl {

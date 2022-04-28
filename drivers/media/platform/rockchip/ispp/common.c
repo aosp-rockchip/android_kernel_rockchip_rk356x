@@ -3,7 +3,6 @@
 
 #include <media/videobuf2-dma-contig.h>
 #include <linux/delay.h>
-#include <linux/iommu.h>
 #include <linux/of_platform.h>
 #include "dev.h"
 #include "regs.h"
@@ -80,14 +79,14 @@ int rkispp_allow_buffer(struct rkispp_device *dev,
 		attrs |= DMA_ATTR_FORCE_CONTIGUOUS;
 	buf->size = PAGE_ALIGN(buf->size);
 	mem_priv = g_ops->alloc(dev->hw_dev->dev, attrs, buf->size,
-				DMA_BIDIRECTIONAL, GFP_KERNEL);
+				DMA_BIDIRECTIONAL, GFP_KERNEL | GFP_DMA32);
 	if (IS_ERR_OR_NULL(mem_priv)) {
 		ret = -ENOMEM;
 		goto err;
 	}
 
 	buf->mem_priv = mem_priv;
-	if (dev->hw_dev->is_mmu) {
+	if (dev->hw_dev->is_dma_sg_ops) {
 		sg_tbl = (struct sg_table *)g_ops->cookie(mem_priv);
 		buf->dma_addr = sg_dma_address(sg_tbl->sgl);
 	} else {
@@ -272,6 +271,7 @@ static void rkispp_free_pool(struct rkispp_hw_dev *hw)
 			if (buf->mem_priv[j]) {
 				g_ops->unmap_dmabuf(buf->mem_priv[j]);
 				g_ops->detach_dmabuf(buf->mem_priv[j]);
+				dma_buf_put(buf->dbufs->dbuf[j]);
 				buf->mem_priv[j] = NULL;
 			}
 		}
@@ -313,17 +313,18 @@ static int rkispp_init_pool(struct rkispp_hw_dev *hw, struct rkisp_ispp_buf *dbu
 		ret = g_ops->map_dmabuf(mem);
 		if (ret)
 			goto err;
-		if (hw->is_mmu) {
+		if (hw->is_dma_sg_ops) {
 			sg_tbl = (struct sg_table *)g_ops->cookie(mem);
 			pool->dma[i] = sg_dma_address(sg_tbl->sgl);
 		} else {
 			pool->dma[i] = *((dma_addr_t *)g_ops->cookie(mem));
 		}
+		get_dma_buf(dbufs->dbuf[i]);
+		pool->vaddr[i] = g_ops->vaddr(mem);
 		if (rkispp_debug)
 			dev_info(hw->dev, "%s dma[%d]:0x%x\n",
 				 __func__, i, (u32)pool->dma[i]);
 
-		pool->vaddr[i] = g_ops->vaddr(mem);
 	}
 	rkispp_init_regbuf(hw);
 	hw->is_idle = true;
@@ -403,19 +404,6 @@ int rkispp_event_handle(struct rkispp_device *ispp, u32 cmd, void *arg)
 	return ret;
 }
 
-void rkispp_soft_reset(struct rkispp_device *ispp)
-{
-	struct rkispp_hw_dev *hw = ispp->hw_dev;
-	struct iommu_domain *domain = iommu_get_domain_for_dev(hw->dev);
-
-	if (domain)
-		iommu_detach_device(domain, hw->dev);
-	writel(GLB_SOFT_RST_ALL, hw->base_addr + RKISPP_CTRL_RESET);
-	udelay(10);
-	if (domain)
-		iommu_attach_device(domain, hw->dev);
-}
-
 static int rkispp_alloc_page_dummy_buf(struct rkispp_device *dev, u32 size)
 {
 	struct rkispp_hw_dev *hw = dev->hw_dev;
@@ -425,7 +413,7 @@ static int rkispp_alloc_page_dummy_buf(struct rkispp_device *dev, u32 size)
 	struct sg_table *sg = NULL;
 	int ret = -ENOMEM;
 
-	page = alloc_pages(GFP_KERNEL, 0);
+	page = alloc_pages(GFP_KERNEL | GFP_DMA32, 0);
 	if (!page)
 		goto err;
 
